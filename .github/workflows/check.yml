@@ -3,7 +3,7 @@
 # Runs every check of the flake on x86_64-linux and aarch64-linux: the
 # fixture builds in the Nix sandbox, JSON3.jl's test suite as the
 # real-world integration test, the lock-run unit tests, the lockfile
-# reader checks and the formatting check. On x86_64-linux it also runs
+# reader checks and the formatting check. On both systems it also runs
 # tests/cli.sh, which needs the network: relocking the fixtures, the
 # offline `julia` command, the everyday loop, damaged lockfiles and
 # registering a version.
@@ -31,7 +31,11 @@ jobs:
       - run: nix flake check -L
 
   cli:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-latest, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4

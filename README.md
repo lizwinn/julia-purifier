@@ -185,7 +185,8 @@ project; an environment whose dependency has a build script), JSON3.jl, the
 lock run's unit tests and the lockfile reader's error checks. `bash
 tests/cli.sh` runs the command with the network: relocks reproduce the
 committed lockfiles byte for byte, the offline `julia`, the everyday loop,
-damaged lockfiles and `register`. CI runs both.
+damaged lockfiles and `register`. CI runs both on x86_64-linux and
+aarch64-linux.
 
 ## Credit
 
