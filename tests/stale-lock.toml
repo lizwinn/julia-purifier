@@ -1,0 +1,12 @@
+# A lockfile for tests/fixtures/app whose recorded hash of Project.toml
+# matches no file, so the lockfile reader finds it stale.
+version = 1
+julia = "1.13.2"
+downloads = []
+
+[inputs]
+"Project.toml" = "0000000000000000000000000000000000000000000000000000000000000000"
+
+[artifacts]
+x86_64-linux = []
+aarch64-linux = []

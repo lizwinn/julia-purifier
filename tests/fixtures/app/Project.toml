@@ -1,0 +1,26 @@
+name = "HelloPurifier"
+uuid = "5b0e3c4e-7c1e-4f0c-9e5a-2f3a6b1d8c41"
+version = "0.1.0"
+
+[deps]
+Example = "7876af07-990d-54b4-ab0e-23690620f79a"
+JSON = "682c06a0-de6a-54ab-a142-c8b1cf79cde6"
+StringEncodings = "69024149-9ee7-55f6-a4c4-859efe599b68"
+
+[sources]
+Example = {rev = "v0.5.5", url = "https://github.com/JuliaLang/Example.jl"}
+
+[compat]
+Example = "0.5.5"
+JSON = "1.13.4"
+StringEncodings = "0.3.7"
+julia = "1.12"
+
+[apps.hello-purifier]
+
+[extras]
+OrderedCollections = "bac558e1-5e72-5ebc-8fee-abe8a469f55d"
+Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
+
+[targets]
+test = ["OrderedCollections", "Test"]

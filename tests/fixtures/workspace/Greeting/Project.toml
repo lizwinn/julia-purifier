@@ -1,0 +1,14 @@
+name = "Greeting"
+uuid = "0d5a1c55-3f7b-4a6e-9a51-6c1f4f9e2b10"
+version = "1.2.0"
+
+[deps]
+Example = "7876af07-990d-54b4-ab0e-23690620f79a"
+SnoopCompileCore = "e2b509da-e806-4183-be48-004708413034"
+
+[sources]
+SnoopCompileCore = {rev = "v3.2.9", subdir = "SnoopCompileCore", url = "https://github.com/timholy/SnoopCompile.jl"}
+
+[compat]
+Example = "0.5.5"
+SnoopCompileCore = "3.1.3"

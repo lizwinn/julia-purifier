@@ -1,0 +1,40 @@
+# This file is written by `julia-purifier lock`. Commit it beside the manifest.
+builds = []
+julia = "1.13.2"
+version = 1
+
+[artifacts]
+aarch64-darwin = []
+aarch64-linux = []
+x86_64-linux = []
+
+[[downloads]]
+hash = "sha256-tTui7PlZV5S1OwCxuy4PWIiTPUINqIG7NuRYNnAyVs0="
+path = "git/4ab94d218f2ffa3689cb5c07a19130c50a583980"
+
+    [downloads.git]
+    leaveDotGit = false
+    rev = "4ab94d218f2ffa3689cb5c07a19130c50a583980"
+    submodules = false
+    url = "https://github.com/timholy/SnoopCompile.jl"
+[[downloads]]
+hash = "sha256-h91PC4l3u9yVzgj6iW1jWq+qPmXd0Gr16aLD6qQyytg="
+path = "packages/Example/SUIr0"
+
+    [downloads.archive]
+    mirrors = ["https://storage.julialang.net/package/7876af07-990d-54b4-ab0e-23690620f79a/e1f0e1a832ccd8e97d6d0348dec33ee139a5aeaf"]
+    stripTop = false
+    url = "https://pkg.julialang.org/package/7876af07-990d-54b4-ab0e-23690620f79a/e1f0e1a832ccd8e97d6d0348dec33ee139a5aeaf"
+
+[inputs]
+"Greeter/Project.toml" = "70a3000cf9d11934bb6892697c6079e6a9c942345164f6d0bb91e03ef73af9b4"
+"Greeting/Project.toml" = "882c3ba179474107e2386ddb498d9ab68434eb4fbc2260ba317e045170975e66"
+"Greeting/test/Project.toml" = "501ef75168913170b75312f1fc76c562060fbfe36e031f89927cc834fca46d58"
+"Manifest.toml" = "7c9c5c5fa19fdaa11e721a9fe9fbbabc216413a2277a6ddb9345617161e0b70c"
+"Project.toml" = "0fda5825dc8db811d376faa5b3aa65ad0e53244e9c496fd09bb8576f97d497a8"
+
+[[links]]
+from = "git/4ab94d218f2ffa3689cb5c07a19130c50a583980/SnoopCompileCore"
+to = "packages/SnoopCompileCore/lIN3I"
+
+[tests]

@@ -1,0 +1,73 @@
+# This file is written by `julia-purifier lock`. Commit it beside the manifest.
+builds = ["packages/Conda/05AVg"]
+julia = "1.13.2"
+links = []
+version = 1
+
+[artifacts]
+aarch64-darwin = []
+aarch64-linux = []
+x86_64-linux = []
+
+[[downloads]]
+hash = "sha256-Zdl/Leyek6jc6bJtAmmJ89n3JAbvEoThoC1LiPV3Nrk="
+path = "packages/Conda/05AVg"
+
+    [downloads.archive]
+    mirrors = ["https://storage.julialang.net/package/8f4d0f93-b110-5947-807f-2305c1781a2d/8f06b0cfa4c514c7b9546756dbae91fcfbc92dc9"]
+    stripTop = false
+    url = "https://pkg.julialang.org/package/8f4d0f93-b110-5947-807f-2305c1781a2d/8f06b0cfa4c514c7b9546756dbae91fcfbc92dc9"
+[[downloads]]
+hash = "sha256-4DFZEbDL9BeqM0eA16d7PZ0Ytu2PBS8WL8tu/2Bz9LQ="
+path = "packages/JSON/45LIG"
+
+    [downloads.archive]
+    mirrors = ["https://storage.julialang.net/package/682c06a0-de6a-54ab-a142-c8b1cf79cde6/06d90f699285d055e34f0b014636a75a17ff2252"]
+    stripTop = false
+    url = "https://pkg.julialang.org/package/682c06a0-de6a-54ab-a142-c8b1cf79cde6/06d90f699285d055e34f0b014636a75a17ff2252"
+[[downloads]]
+hash = "sha256-iNOL4K1VOl4v29D6pc4IW8BwbFcFY8PK8pkMcJlccUc="
+path = "packages/Parsers/0OheC"
+
+    [downloads.archive]
+    mirrors = ["https://storage.julialang.net/package/69de0a69-1ddd-5017-9359-2bf0b02dc9f0/91503bbab255aec9374145accd1b09c7e108cd54"]
+    stripTop = false
+    url = "https://pkg.julialang.org/package/69de0a69-1ddd-5017-9359-2bf0b02dc9f0/91503bbab255aec9374145accd1b09c7e108cd54"
+[[downloads]]
+hash = "sha256-FIKYN0TdWCLkI1geEUNt7fiVGWdVSnvmN4rz6XmGIlQ="
+path = "packages/PrecompileTools/QUxvR"
+
+    [downloads.archive]
+    mirrors = ["https://storage.julialang.net/package/aea7be01-6a6a-4083-8856-8a6e6704d82a/edbeefc7a4889f528644251bdb5fc9ab5348bc2c"]
+    stripTop = false
+    url = "https://pkg.julialang.org/package/aea7be01-6a6a-4083-8856-8a6e6704d82a/edbeefc7a4889f528644251bdb5fc9ab5348bc2c"
+[[downloads]]
+hash = "sha256-birvB13sK50xf2yN37EjsfoBKiKBEhiAbkNDaDerBqk="
+path = "packages/Preferences/Q68Ah"
+
+    [downloads.archive]
+    mirrors = ["https://storage.julialang.net/package/21216c6a-2e73-6563-6e65-726566657250/aef1987d90dcc2e2cbd919ad10b2d25bcce4f418"]
+    stripTop = false
+    url = "https://pkg.julialang.org/package/21216c6a-2e73-6563-6e65-726566657250/aef1987d90dcc2e2cbd919ad10b2d25bcce4f418"
+[[downloads]]
+hash = "sha256-LkMoWzogcOjEBpPvcVHl5cE5TWbN7vB6q+oXQ4v3V4Y="
+path = "packages/StructUtils/DmQj1"
+
+    [downloads.archive]
+    mirrors = ["https://storage.julialang.net/package/ec057cc2-7a8d-4b58-b3b3-92acb9f63b42/b04bfab37484defe300b2f9ed64469abab2431ff"]
+    stripTop = false
+    url = "https://pkg.julialang.org/package/ec057cc2-7a8d-4b58-b3b3-92acb9f63b42/b04bfab37484defe300b2f9ed64469abab2431ff"
+[[downloads]]
+hash = "sha256-OH4eUlbZy63OhxoktXGyAb7WqtzUjJbk5GjLVLMSV2w="
+path = "packages/VersionParsing/2LjYI"
+
+    [downloads.archive]
+    mirrors = ["https://storage.julialang.net/package/81def892-9a0e-5fdd-b105-ffc91e053289/58d6e80b4ee071f5efd07fda82cb9fbe17200868"]
+    stripTop = false
+    url = "https://pkg.julialang.org/package/81def892-9a0e-5fdd-b105-ffc91e053289/58d6e80b4ee071f5efd07fda82cb9fbe17200868"
+
+[inputs]
+"Manifest.toml" = "6314950ead028d9568c1e10d82d01f726c905bca33c5bc4f9d680ec8d40813f7"
+"Project.toml" = "76ebc7bae57bc98fb694ec3fd05951ab7dd38cf7054bb3cb404dcaa1a5301665"
+
+[tests]

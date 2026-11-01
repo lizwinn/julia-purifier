@@ -1,0 +1,5 @@
+[workspace]
+projects = ["Greeting", "Greeting/test", "Greeter"]
+
+[compat]
+julia = "1.12"

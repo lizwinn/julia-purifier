@@ -1,0 +1,11 @@
+name = "Greeter"
+uuid = "6a4b8f1e-2d93-4c7a-b0e5-91d3c7f5a826"
+version = "0.3.0"
+
+[deps]
+Greeting = "0d5a1c55-3f7b-4a6e-9a51-6c1f4f9e2b10"
+
+[sources]
+Greeting = {path = "../Greeting"}
+
+[apps.greet]

@@ -1,0 +1,5 @@
+[deps]
+Conda = "8f4d0f93-b110-5947-807f-2305c1781a2d"
+
+[compat]
+julia = "1.12"

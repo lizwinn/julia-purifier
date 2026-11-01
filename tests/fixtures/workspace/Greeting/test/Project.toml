@@ -1,0 +1,6 @@
+[deps]
+Greeting = "0d5a1c55-3f7b-4a6e-9a51-6c1f4f9e2b10"
+Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
+
+[sources]
+Greeting = {path = ".."}
