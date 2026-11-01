@@ -109,7 +109,9 @@ evaluation with it.
 
 ## Development loop
 
-The development loop goes through Julia itself, on the locked downloads:
+The development loop goes through Julia itself, on the locked downloads.
+Pkg has no plugin mechanism for tasks, so the `julia-purifier` command is a
+program that runs Pkg and records what Pkg downloaded:
 
 - `julia-purifier julia [args...]` runs Julia with `JULIA_PKG_OFFLINE=true`
   and the project active. Edit the code of the project and run it this way;
@@ -129,11 +131,13 @@ The development loop goes through Julia itself, on the locked downloads:
 - `julia-purifier publish <registry> [--push] [dir]` builds and tests the
   committed tree of the project with Nix, and then registers the version of
   each package with [LocalRegistry.jl](https://github.com/GunnarFarneback/LocalRegistry.jl).
-  `registry` is the name or URL of a registry. The registry records the tree
-  Nix built and tested; the command stops if the released tree differs from
-  the committed one. For the General registry, which accepts versions
-  through its Registrator bot, register the commit that this command has
-  built.
+  `registry` is the name or URL of a registry. A Julia package has no archive
+  to upload: a version is an entry in a registry that names a git tree. The
+  `release` therefore holds the source and tree hash that Nix built and
+  tested, and `publish` registers that tree. The command stops if the
+  released tree differs from the committed one. For the General registry,
+  which accepts versions through its Registrator bot, register the commit
+  that this command has built.
 
 A lockfile kept outside the project is named by `--lockfile <path>`, right
 after the name of the command, or by the environment variable
