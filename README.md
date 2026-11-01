@@ -219,21 +219,17 @@ SSH URLs are recorded as the HTTPS URL of the same host, since the sandbox
 has no SSH keys. A private repository then needs a `fetchers` entry with
 credentials.
 
-## Real-world projects
+## Examples
 
-- [JSON3.jl](https://github.com/quinnj/JSON3.jl) v1.14.4 (commit 15061b1).
-  Its whole test suite, with Arrow, its LZ4 and Zstd artifacts and the
-  ArrowTypes extension of JSON3, runs offline as the `realworld-json3-tests`
-  check.
-- [CSV.jl](https://github.com/JuliaData/CSV.jl) v1.3.0 (commit 1f684f5),
-  which has no committed manifest and a `test/Project.toml`. The lock
-  resolves its manifest and records its test environment in about 16
-  seconds, and its test suite (331,401 tests) passes in the sandbox.
+CI builds [JSON3.jl](https://github.com/quinnj/JSON3.jl) v1.14.4 (commit
+15061b1) from a lockfile kept beside its source. Its whole test suite, with
+Arrow, its LZ4 and Zstd artifacts and the ArrowTypes extension of JSON3,
+runs offline as the `realworld-json3-tests` check.
 
-The fixtures in `tests/fixtures` are an application with a git dependency, a
-JLL artifact, a command and a test-only dependency; a workspace with a
-package from a repository subdirectory and a workspace test project; and an
-environment whose dependency has a build script.
+The fixtures in `tests/fixtures` show the other cases: an application with a
+git dependency, a JLL artifact, a command and a test-only dependency; a
+workspace with a package from a repository subdirectory and a workspace test
+project; and an environment whose dependency has a build script.
 
 The checks of the flake include the conformance checks of the contract:
 `conformance-stale`, `-tampered`, `-missing`, `-malformed`, `-external`,
