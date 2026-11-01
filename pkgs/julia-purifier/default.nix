@@ -39,6 +39,9 @@ writeShellApplication {
     nixpkgs=${path}
     system=${stdenv.hostPlatform.system}
     lib=${../../nix/lib}
+    # The flake's lock, which pins the shared purifier library for the
+    # evaluations below.
+    flake_lock=${../../flake.lock}
     lock_jl=${../../src/lock.jl}
     register_jl=${../../src/register.jl}
 
@@ -127,6 +130,7 @@ writeShellApplication {
           import $lib/interactive.nix {
             pkgs = import (builtins.getEnv \"JP_NIXPKGS\") { system = builtins.getEnv \"JP_SYSTEM\"; };
             src = /. + builtins.getEnv \"JP_ROOT\";
+            flakeLock = $flake_lock;
           }
         "; then
           echo "julia-purifier: the lockfile does not build; run \`julia-purifier lock\` to renew it, or set JULIA_PURIFIER=0" >&2
@@ -213,7 +217,8 @@ writeShellApplication {
             repo = builtins.fetchGit { url = builtins.getEnv \"JP_TOP\"; rev = builtins.getEnv \"JP_REV\"; };
             sub = builtins.getEnv \"JP_SUB\";
             src = if sub == \".\" then repo else repo + \"/\" + sub;
-            project = pkgs.callPackage $lib/build-julia-project.nix { } { inherit src; doCheck = true; };
+            purifier = import $lib/purifier.nix { inherit (pkgs) lib; flakeLock = $flake_lock; };
+            project = pkgs.callPackage $lib/build-julia-project.nix { inherit purifier; } { inherit src; doCheck = true; };
           in
           builtins.attrValues project.packages
         "

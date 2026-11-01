@@ -32,7 +32,8 @@
   stdenvNoCC,
   runCommand,
   makeWrapper,
-  callPackage,
+  # The `purifier` namespace of the shared purifier library.
+  purifier,
 }:
 {
   # The project root: the directory with the Manifest.toml and the
@@ -84,9 +85,10 @@ let
       pkgs.${juliaAttr}
         or (throw "julia-purifier: the lock was made with Julia ${l.julia}, and this nixpkgs has no ${juliaAttr}; pass `julia` to buildJuliaProject.");
 
-  downloads = callPackage ./dependencies.nix {
-    inherit (l) downloads;
+  downloads = purifier.tree {
+    inherit pkgs;
     name = "julia-purifier-downloads";
+    entries = l.downloads;
   };
 
   # The depot paths that hold package sources and artifacts. Downloads

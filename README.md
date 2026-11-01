@@ -128,8 +128,9 @@ start without compiling anything the build already compiled.
 
 The lockfile is TOML, which both Pkg and Nix read. It holds
 
-- `downloads`: each package source, as the shared purifier library's entry
-  shapes. A package the package server serves is an archive entry
+- `downloads` holds each package source as an entry of the shared
+  [purifier](https://github.com/nix-purifiers/purifier) library, which
+  fetches the entries and lays them out. A package the package server serves is an archive entry
   (`{ path, archive = { url, mirrors, stripTop }, hash }`) at
   `packages/<Name>/<slug>`, with the storage server as a mirror. A package
   from a git repository is a git entry (`{ path, git = { url, rev,

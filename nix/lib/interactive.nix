@@ -9,9 +9,15 @@
 {
   pkgs,
   src,
+  # This flake's flake.lock, which pins the shared purifier library.
+  flakeLock,
 }:
 let
-  project = pkgs.callPackage ./build-julia-project.nix { } { inherit src; };
+  purifier = import ./purifier.nix {
+    inherit (pkgs) lib;
+    inherit flakeLock;
+  };
+  project = pkgs.callPackage ./build-julia-project.nix { inherit purifier; } { inherit src; };
 in
 pkgs.runCommand "julia-purifier-interactive" { } ''
   mkdir -p "$out"
