@@ -164,7 +164,7 @@ expect_failure() {
         overlays = [ f.overlays.default ];
       };
     in
-    (pkgs.buildJuliaProject {
+    (pkgs.julia-purifier.buildJuliaProject {
       src = /. + builtins.getEnv \"NIX_JP_SRC\";
     }).depot
   " 2> "$work/$name.log"; then

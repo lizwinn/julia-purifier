@@ -18,7 +18,7 @@ let
   inherit (pkgs) lib;
 
   withOverlay = pkgs.extend overlay;
-  inherit (withOverlay) buildJuliaProject;
+  inherit (withOverlay.julia-purifier) buildJuliaProject;
   build = buildJuliaProject;
 
   # One package with a command, a JSON dependency from the General
@@ -284,7 +284,7 @@ in
   unlocked-system =
     let
       riscv = (import pkgs.path { system = "riscv64-linux"; }).extend overlay;
-      project = riscv.buildJuliaProject {
+      project = riscv.julia-purifier.buildJuliaProject {
         src = ./fixtures/app;
         julia = pkgs.julia_113-bin;
       };
@@ -293,11 +293,15 @@ in
       "a lockfile evaluated for a system it has no artifacts for";
 
   # A package written for callPackage takes the builder by name.
-  consumer = evalCheck "consumer" (
-    (withOverlay.callPackage (
-      { buildJuliaProject }: (buildJuliaProject { src = ./fixtures/app; }).packages.HelloPurifier
-    ) { }).name == app.packages.HelloPurifier.name
-  ) "a package that takes buildJuliaProject by name differs from the one built through the overlay";
+  consumer =
+    evalCheck "consumer"
+      (
+        (withOverlay.callPackage (
+          { julia-purifier }:
+          (julia-purifier.buildJuliaProject { src = ./fixtures/app; }).packages.HelloPurifier
+        ) { }).name == app.packages.HelloPurifier.name
+      )
+      "a package that takes the julia-purifier scope by name differs from the one built through the overlay";
 
   # `override` replaces what the builder takes from the package set: here
   # the Julia that the manifest names.

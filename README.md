@@ -27,8 +27,9 @@ recommend committing both files, `Manifest.toml` and
 the flake below builds from it.
 
 To build the project in a flake, apply the overlay of julia-purifier to a
-package set. The overlay adds `buildJuliaProject` to the package set, and a
-package written for `callPackage` takes it by name:
+package set. The overlay adds one attribute to the package set, the scope
+`pkgs.julia-purifier`, which holds the builder `buildJuliaProject` and the
+command `julia-purifier`:
 
 ```nix
 {
@@ -42,9 +43,7 @@ package written for `callPackage` takes it by name:
         inherit system;
         overlays = [ julia-purifier.overlays.default ];
       };
-      project = pkgs.callPackage
-        ({ buildJuliaProject }: buildJuliaProject { src = ./.; })
-        { };
+      project = pkgs.julia-purifier.buildJuliaProject { src = ./.; };
     in
     {
       packages.${system}.default = project.packages.MyPackage;
@@ -53,6 +52,9 @@ package written for `callPackage` takes it by name:
 }
 ```
 
+A package written for `callPackage` takes the scope by name, as
+`{ julia-purifier }: julia-purifier.buildJuliaProject { src = ./.; }`.
+`julia-purifier.overrideScope` replaces what the scope shares, and
 `buildJuliaProject.override` replaces the packages that the builder takes
 from the package set, such as `julia_113-bin`. The builder takes
 
@@ -278,7 +280,7 @@ it from those files:
         inherit system;
         overlays = [ julia-purifier.overlays.default ];
       };
-      project = pkgs.buildJuliaProject {
+      project = pkgs.julia-purifier.buildJuliaProject {
         src = json3;
         manifest = ./Manifest.toml;
         lockFile = ./julia-purifier.lock.json;
