@@ -21,11 +21,8 @@ let
     inherit (pkgs) lib;
     inherit flakeLock;
   };
-  buildJuliaProject = import ./build-julia-project.nix {
-    inherit (pkgs) lib;
-    inherit purifier;
-  };
-  project = buildJuliaProject { inherit pkgs src lockFile; };
+  buildJuliaProject = pkgs.callPackage ./build-julia-project.nix { inherit purifier; };
+  project = buildJuliaProject { inherit src lockFile; };
 in
 pkgs.runCommand "julia-purifier-prefetch" { } ''
   mkdir -p "$out"

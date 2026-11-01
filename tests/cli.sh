@@ -17,7 +17,7 @@
 #   julia     `julia` in the app fixture runs Julia on the locked
 #             dependencies, offline, and loads the project
 #   stale     `julia` refuses a stale lockfile, with a message to relock
-#   loop      the everyday loop: Julia started in the environment `env`
+#   loop      the development loop: Julia started in the environment `env`
 #             prints loads the project; adding a dependency makes the
 #             lockfile stale until a relock; after it, the new dependency
 #             loads offline
@@ -159,10 +159,12 @@ expect_failure() {
   if NIX_JP_SRC="$work/$name" nix build --impure --no-link --expr "
     let
       f = builtins.getFlake \"git+file://$repo\";
-      pkgs = import f.inputs.nixpkgs { system = builtins.currentSystem; };
+      pkgs = import f.inputs.nixpkgs {
+        system = builtins.currentSystem;
+        overlays = [ f.overlays.default ];
+      };
     in
-    (f.lib.julia-purifier.buildJuliaProject {
-      inherit pkgs;
+    (pkgs.buildJuliaProject {
       src = /. + builtins.getEnv \"NIX_JP_SRC\";
     }).depot
   " 2> "$work/$name.log"; then

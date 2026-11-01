@@ -62,7 +62,6 @@
             checks = import ../../../tests {
               inherit pkgs;
               inherit (inputs) json3;
-              inherit (self.lib.julia-purifier) buildJuliaProject;
               readLock' = self.lib.julia-purifier.readLock;
               inherit (self.lib.purifier) checkLock;
               overlay = self.overlays.default;

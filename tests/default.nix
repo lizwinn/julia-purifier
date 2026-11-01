@@ -4,8 +4,7 @@
 # access is the fixed-output fetches of locked downloads.
 {
   pkgs,
-  # lib.julia-purifier.buildJuliaProject and readLock of this flake.
-  buildJuliaProject,
+  # lib.julia-purifier.readLock of this flake.
   readLock',
   # lib.purifier.checkLock of the shared library.
   checkLock,
@@ -19,7 +18,8 @@ let
   inherit (pkgs) lib;
 
   withOverlay = pkgs.extend overlay;
-  build = args: buildJuliaProject ({ inherit pkgs; } // args);
+  inherit (withOverlay) buildJuliaProject;
+  build = buildJuliaProject;
 
   # One package with a command, a JSON dependency from the General
   # registry, StringEncodings with its Libiconv_jll artifact, Example from
@@ -275,13 +275,30 @@ in
 
   # A build for a system the lockfile has no artifacts for fails
   # evaluation.
-  unlocked-system = evalCheck "unlocked-system" (fails
-    (buildJuliaProject {
-      pkgs = import pkgs.path { system = "riscv64-linux"; };
-      src = ./fixtures/app;
-      julia = pkgs.julia_113-bin;
-    }).depot.drvPath
-  ) "a lockfile evaluated for a system it has no artifacts for";
+  unlocked-system =
+    let
+      riscv = (import pkgs.path { system = "riscv64-linux"; }).extend overlay;
+      project = riscv.buildJuliaProject {
+        src = ./fixtures/app;
+        julia = pkgs.julia_113-bin;
+      };
+    in
+    evalCheck "unlocked-system" (fails project.depot.drvPath)
+      "a lockfile evaluated for a system it has no artifacts for";
+
+  # A package written for callPackage takes the builder by name.
+  consumer = evalCheck "consumer" (
+    (withOverlay.callPackage (
+      { buildJuliaProject }: (buildJuliaProject { src = ./fixtures/app; }).packages.HelloPurifier
+    ) { }).name == app.packages.HelloPurifier.name
+  ) "a package that takes buildJuliaProject by name differs from the one built through the overlay";
+
+  # `override` replaces what the builder takes from the package set: here
+  # the Julia that the manifest names.
+  builder-override = evalCheck "builder-override" (
+    ((buildJuliaProject.override { julia_113-bin = pkgs.julia_110-bin; }) { src = ./fixtures/app; })
+    .julia == pkgs.julia_110-bin
+  ) "override did not replace the Julia package of the builder";
 
   # The app's source without its lockfile builds from the lockfile beside
   # it.
@@ -305,7 +322,7 @@ in
     }).depot;
 
   # After a prefetch, with no network (the sandbox has none), the
-  # everyday loop works in a writable copy of the project: Pkg
+  # development loop works in a writable copy of the project: Pkg
   # instantiates, the project loads, Pkg.test resolves and runs the tests
   # against the prefetched registry, and the language server loads.
   conformance-offline =

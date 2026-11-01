@@ -8,7 +8,7 @@ the Nix hash of each package source, the URL and hash of each artifact, the
 registry snapshot, and the test and editor environments that Pkg resolves
 apart from the manifest. Nix then fetches those files, builds a depot from
 them, precompiles in the sandbox, and runs the commands and tests of the
-project offline. The project commits no generated Nix files.
+project offline.
 
 julia-purifier meets the [purifier contract](https://github.com/nix-purifiers/purifier/blob/main/CONTRACT.md).
 
@@ -24,7 +24,9 @@ This writes `julia-purifier.lock.json` beside the manifest. A project without
 a manifest gets one, because the lock resolves the project first. Commit both
 files.
 
-To build the project in a flake, use the builder in the library of the flake:
+To build the project in a flake, apply the overlay of julia-purifier to a
+package set. The overlay adds `buildJuliaProject` to the package set, and a
+package written for `callPackage` takes it by name:
 
 ```nix
 {
@@ -34,11 +36,13 @@ To build the project in a flake, use the builder in the library of the flake:
   outputs = { nixpkgs, julia-purifier, ... }:
     let
       system = "x86_64-linux";
-      pkgs = nixpkgs.legacyPackages.${system};
-      project = julia-purifier.lib.julia-purifier.buildJuliaProject {
-        inherit pkgs;
-        src = ./.;
+      pkgs = import nixpkgs {
+        inherit system;
+        overlays = [ julia-purifier.overlays.default ];
       };
+      project = pkgs.callPackage
+        ({ buildJuliaProject }: buildJuliaProject { src = ./.; })
+        { };
     in
     {
       packages.${system}.default = project.packages.MyPackage;
@@ -47,10 +51,11 @@ To build the project in a flake, use the builder in the library of the flake:
 }
 ```
 
-`buildJuliaProject` takes
+`buildJuliaProject.override` replaces the packages that the builder takes
+from the package set, such as `julia_113-bin`. The builder takes
 
-- `pkgs` and `src`, the package set and the project root: the directory with
-  the manifest (the root of a workspace)
+- `src`, the project root: the directory with the manifest (the root of a
+  workspace)
 - `lockFile`, which defaults to `julia-purifier.lock.json` in `src`. A
   lockfile outside `src` takes the place of any lockfile in it
 - `manifestFile`, when the manifest is not in `src`. Julia packages often keep
@@ -58,8 +63,8 @@ To build the project in a flake, use the builder in the library of the flake:
   lockfile beside the package instead
 - `fetchers`, which goes unchanged to `fetchEntry` and `tree` of the shared
   library. A company mirror or credentials go into `fetchers.fetchurl`
-- `julia`, the Julia to build with. The default is the nixpkgs
-  `julia_1XY-bin` of the major and minor version the manifest names
+- `julia`, the Julia to build with. The default is the `julia_1XY-bin` of the
+  package set for the major and minor version the manifest names
 - `doCheck`, which makes building each package run its tests
 - `precompile`, which defaults to true. Julia stamps every precompiled cache
   with a build identifier, so two builds with precompiled caches differ in
@@ -92,8 +97,9 @@ The result has these attributes, all known at evaluation time:
 - `compiled`: the precompiled caches of the packages of the project
 - `editor`: the environment of the language server (see Editor)
 
-`lib.julia-purifier.readLock { src, lockFile ? ..., manifestFile ? null }`
-reads the manifest and the lockfile into the shared shape
+The library of the flake holds
+`lib.julia-purifier.readLock { src, lockFile ? ..., manifestFile ? null }`,
+which reads the manifest and the lockfile into the shared shape
 `{ purifier; entries; outputs; problems; }`. A stale, tampered, malformed or
 incomplete lockfile shows up in `problems`, and the builder fails
 evaluation with it.
@@ -101,9 +107,9 @@ evaluation with it.
 `nix develop github:nix-purifiers/julia-purifier` gives a shell with the
 `julia-purifier` command.
 
-## Everyday loop
+## Development loop
 
-The everyday loop goes through Julia itself, on the locked downloads:
+The development loop goes through Julia itself, on the locked downloads:
 
 - `julia-purifier julia [args...]` runs Julia with `JULIA_PKG_OFFLINE=true`
   and the project active. Edit the code of the project and run it this way;
@@ -134,7 +140,7 @@ after the name of the command, or by the environment variable
 `JULIA_PURIFIER_LOCKFILE`. The flag takes precedence over the variable, and
 both take precedence over the lockfile beside the manifest.
 
-## Offline work
+## Working offline
 
 ```zsh
 julia-purifier prefetch
@@ -166,7 +172,7 @@ under `$XDG_CACHE_HOME/julia-purifier`.
 For a tool that wants to start Julia itself, `eval "$(julia-purifier env)"`
 puts the locked environment on its `PATH`.
 
-## Errors and fixes
+## Troubleshooting
 
 Each of these fails the command and the Nix evaluation with a message that
 names the file and the command to run:
@@ -190,7 +196,7 @@ Precompiled caches are not reproducible bit for bit, because Julia stamps
 each one with a build identifier. `precompile = false` makes every output
 reproducible, and Julia then compiles on first use.
 
-## Sources supported and refused
+## Supported language repositories
 
 Supported:
 
@@ -256,9 +262,11 @@ it from those files:
   outputs = { nixpkgs, julia-purifier, json3, ... }:
     let
       system = "x86_64-linux";
-      pkgs = nixpkgs.legacyPackages.${system};
-      project = julia-purifier.lib.julia-purifier.buildJuliaProject {
-        inherit pkgs;
+      pkgs = import nixpkgs {
+        inherit system;
+        overlays = [ julia-purifier.overlays.default ];
+      };
+      project = pkgs.buildJuliaProject {
         src = json3;
         manifestFile = ./Manifest.toml;
         lockFile = ./julia-purifier.lock.json;

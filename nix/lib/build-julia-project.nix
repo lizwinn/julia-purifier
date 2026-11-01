@@ -1,11 +1,18 @@
 # SPDX-License-Identifier: MIT
 #
-# lib.julia-purifier.buildJuliaProject: builds a Julia project in the Nix
-# sandbox from its manifest and julia-purifier.lock.json, offline.
+# buildJuliaProject: builds a Julia project in the Nix sandbox from its
+# manifest and julia-purifier.lock.json, offline.
 #
-#   (lib.julia-purifier.buildJuliaProject { inherit pkgs; src = ./.; }).packages.<Name>
+# The file is a package for callPackage: the first argument set is what it
+# takes from the package set, and the result is the builder. The flake of
+# julia-purifier adds it to the package set as `buildJuliaProject` with
+# `overlays.default`, so a package written for callPackage takes it like any
+# other dependency:
 #
-# The result has
+#   { buildJuliaProject }: (buildJuliaProject { src = ./.; }).packages.<Name>
+#
+# and `buildJuliaProject.override` replaces what it takes from the set. The
+# builder returns
 #
 #   packages     one package per project that is a Julia package (the root
 #                and the members of a workspace), by package name. Each has
@@ -34,14 +41,33 @@
 #
 # Every attribute name of the result is known at evaluation time, from the
 # Project.toml files and the lockfile.
-{ lib, purifier }:
 {
-  pkgs,
+  lib,
+  stdenvNoCC,
+  runCommand,
+  makeWrapper,
+  writeText,
+  unzip,
+  zstd,
+  python3,
+  fetchurl,
+  fetchgit,
+  # The shared purifier library, which lays out the downloads.
+  purifier,
+  # The Julia packages of the package set. The default Julia of a build is
+  # the one of the major and minor version that the manifest names.
+  julia_110-bin ? null,
+  julia_111-bin ? null,
+  julia_112-bin ? null,
+  julia_113-bin ? null,
+}:
+{
   # The project root: the directory with the Manifest.toml (the root of a
   # workspace).
   src,
-  # Fetchers for the shared purifier library, in place of nixpkgs' own, such
-  # as a `fetchurl` that goes through a company mirror or sends credentials.
+  # Fetchers for the shared purifier library, in place of the ones of the
+  # package set, such as a `fetchurl` that goes through a company mirror or
+  # sends credentials.
   fetchers ? { },
   # The lockfile. A lockfile kept outside `src` replaces any copy in it.
   lockFile ? src + "/julia-purifier.lock.json",
@@ -61,8 +87,7 @@
   precompile ? true,
 }:
 let
-  inherit (pkgs) runCommand makeWrapper;
-  system = pkgs.stdenvNoCC.hostPlatform.system;
+  system = stdenvNoCC.hostPlatform.system;
   lock = purifier.checkLock (
     import ./lock.nix { inherit lib; } {
       inherit src lockFile manifestFile;
@@ -93,16 +118,34 @@ let
 
   juliaVersion = lib.splitVersion l.julia;
   juliaAttr = "julia_${builtins.elemAt juliaVersion 0}${builtins.elemAt juliaVersion 1}-bin";
+  juliaPackages = {
+    "julia_110-bin" = julia_110-bin;
+    "julia_111-bin" = julia_111-bin;
+    "julia_112-bin" = julia_112-bin;
+    "julia_113-bin" = julia_113-bin;
+  };
   julia' =
     if julia != null then
       julia
+    else if juliaPackages.${juliaAttr} or null != null then
+      juliaPackages.${juliaAttr}
     else
-      pkgs.${juliaAttr}
-        or (throw "julia-purifier: the lock was made with Julia ${l.julia}, and this nixpkgs has no ${juliaAttr}; pass `julia` to buildJuliaProject.");
+      throw "julia-purifier: the lock was made with Julia ${l.julia}, and the package set has no ${juliaAttr}; pass `julia` to buildJuliaProject.";
 
   downloads = purifier.tree (
     {
-      inherit pkgs;
+      # The packages that the shared library builds the downloads with.
+      pkgs = {
+        inherit
+          runCommand
+          writeText
+          unzip
+          zstd
+          python3
+          fetchurl
+          fetchgit
+          ;
+      };
       name = "julia-purifier-downloads";
       entries = l.downloads;
     }
