@@ -42,6 +42,13 @@ nix build --impure --expr '
   (pkgs.julia-purifier.buildJuliaProject { src = ./.; }).packages.MyPackage'
 ```
 
+This uses the purifier's pinned nixpkgs, matching the lock command above.
+To build with ambient `<nixpkgs>` from your Nix search path instead,
+replace `import purifier.inputs.nixpkgs` with `import <nixpkgs>`.
+Both forms need no Nix files in your project. The build tool and language
+versions must match the lockfile; with ambient nixpkgs, lock with the
+purifier from that package set or pass a compatible toolchain to the builder.
+
 The overlay adds one attribute to the package set, the scope
 `pkgs.julia-purifier`, which holds the builder `buildJuliaProject` and the
 command `julia-purifier`. The result of the build has `bin/<app>` for each
