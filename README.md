@@ -24,12 +24,31 @@ This writes `julia-purifier.lock.json` beside the manifest. A project without
 a manifest gets one, because the lock resolves the project first. We
 recommend committing both files, `Manifest.toml` and
 `julia-purifier.lock.json`, to the repository. That is the default setup, and
-the flake below builds from it.
+the build below uses them.
 
-To build the project in a flake, apply the overlay of julia-purifier to a
-package set. The overlay adds one attribute to the package set, the scope
+Then build the project from its directory. The command adds no Nix file to
+the project. Replace `MyPackage` with the name of the package in your
+Project.toml:
+
+```zsh
+nix build --impure --expr '
+  let
+    purifier = builtins.getFlake "github:nix-purifiers/julia-purifier";
+    pkgs = import purifier.inputs.nixpkgs {
+      system = builtins.currentSystem;
+      overlays = [ purifier.overlays.default ];
+    };
+  in
+  (pkgs.julia-purifier.buildJuliaProject { src = ./.; }).packages.MyPackage'
+```
+
+The overlay adds one attribute to the package set, the scope
 `pkgs.julia-purifier`, which holds the builder `buildJuliaProject` and the
-command `julia-purifier`:
+command `julia-purifier`. The result of the build has `bin/<app>` for each
+entry of the `[apps]` table of the package.
+
+A project whose authors want a flake packages it with the same builder. The
+flake can live in the repository of the project or in another repository:
 
 ```nix
 {
@@ -52,8 +71,6 @@ command `julia-purifier`:
 }
 ```
 
-A package written for `callPackage` takes the scope by name, as
-`{ julia-purifier }: julia-purifier.buildJuliaProject { src = ./.; }`.
 `julia-purifier.overrideScope` replaces what the scope shares, and
 `buildJuliaProject.override` replaces the packages that the builder takes
 from the package set, such as `julia_113-bin`. The builder takes
@@ -239,64 +256,33 @@ credentials.
 ## Examples
 
 This example builds and tests [JSON3.jl](https://github.com/quinnj/JSON3.jl),
-a package you do not own, from a flake of your own. You cannot commit files
-to the repository of JSON3.jl, so this is an external build: the flake keeps
-the `Manifest.toml` and the lockfile beside it. A project in your own
-repository commits both files and builds as in the Quickstart.
-
-Lock the package. In a clone of JSON3.jl, run
+a package that commits no `Manifest.toml`. In a clone of the repository, lock
+the project:
 
 ```zsh
 git clone https://github.com/quinnj/JSON3.jl
 cd JSON3.jl
-julia-purifier lock
+nix run github:nix-purifiers/julia-purifier -- lock
 ```
 
-The lock resolves the project, writes `Manifest.toml` and
-`julia-purifier.lock.json`, and records the test environment. Copy both files
-into the directory of your flake:
+The lock resolves the project, and writes `Manifest.toml` and
+`julia-purifier.lock.json` into the clone. Then build the package from the
+directory of the clone:
 
 ```zsh
-mkdir ../json3-flake
-cp Manifest.toml julia-purifier.lock.json ../json3-flake/
-```
-
-The flake in `../json3-flake/flake.nix` takes JSON3.jl as a source and builds
-it from those files:
-
-```nix
-{
-  inputs.julia-purifier.url = "github:nix-purifiers/julia-purifier";
-  inputs.nixpkgs.follows = "julia-purifier/nixpkgs";
-  inputs.json3 = {
-    url = "github:quinnj/JSON3.jl";
-    flake = false;
-  };
-
-  outputs = { nixpkgs, julia-purifier, json3, ... }:
-    let
-      system = "x86_64-linux";
-      pkgs = import nixpkgs {
-        inherit system;
-        overlays = [ julia-purifier.overlays.default ];
-      };
-      project = pkgs.julia-purifier.buildJuliaProject {
-        src = json3;
-        manifest = ./Manifest.toml;
-        lockFile = ./julia-purifier.lock.json;
-      };
-    in
-    {
-      packages.${system}.default = project.packages.JSON3;
-      checks.${system}.tests = project.tests;
+nix build --impure --expr '
+  let
+    purifier = builtins.getFlake "github:nix-purifiers/julia-purifier";
+    pkgs = import purifier.inputs.nixpkgs {
+      system = builtins.currentSystem;
+      overlays = [ purifier.overlays.default ];
     };
-}
+  in
+  (pkgs.julia-purifier.buildJuliaProject { src = ./.; }).packages.JSON3'
 ```
 
-Then `nix flake check` runs the test suite of JSON3.jl in the sandbox, and
-`nix build` builds the package. After you change the version of JSON3.jl in
-the flake, run `julia-purifier lock` in a clone at that version and copy the
-two files again.
+To run the test suite of JSON3.jl in the sandbox, build `.tests` in place of
+`.packages.JSON3`.
 
 ## Credits
 
