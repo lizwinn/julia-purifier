@@ -186,10 +186,9 @@ mismatch error of Nix. A `deps/build.jl` that downloads files itself fails in
 the sandbox, because Pkg records nothing of such downloads. Current packages
 fetch binaries as artifacts instead, which the lock records.
 
-The depot is not reproducible bit for bit with precompiled caches. Only the
-`.ji` and `.so` files in `compiled` differ between two builds, because Julia
-stamps them with a build identifier. `precompile = false` removes the
-difference.
+Precompiled caches are not reproducible bit for bit, because Julia stamps
+each one with a build identifier. `precompile = false` makes every output
+reproducible, and Julia then compiles on first use.
 
 ## Sources supported and refused
 
@@ -221,22 +220,61 @@ credentials.
 
 ## Examples
 
-CI builds [JSON3.jl](https://github.com/quinnj/JSON3.jl) v1.14.4 (commit
-15061b1) from a lockfile kept beside its source. Its whole test suite, with
-Arrow, its LZ4 and Zstd artifacts and the ArrowTypes extension of JSON3,
-runs offline as the `realworld-json3-tests` check.
+This example builds and tests [JSON3.jl](https://github.com/quinnj/JSON3.jl),
+a package you do not own, from a flake of your own. JSON3.jl commits no
+Manifest.toml, so the flake keeps the manifest and the lockfile beside it.
 
-The fixtures in `tests/fixtures` show the other cases: an application with a
-git dependency, a JLL artifact, a command and a test-only dependency; a
-workspace with a package from a repository subdirectory and a workspace test
-project; and an environment whose dependency has a build script.
+Lock the package. In a clone of JSON3.jl, run
 
-The checks of the flake include the conformance checks of the contract:
-`conformance-stale`, `-tampered`, `-missing`, `-malformed`, `-external`,
-`-offline` and `-rebuild`. The CI jobs `conformance-relock`,
-`conformance-update` and `conformance-rebuild` need the network and run
-`bash tests/cli.sh relock`, `update` and `rebuild`. CI runs everything on
-x86_64-linux and aarch64-linux.
+```zsh
+git clone https://github.com/quinnj/JSON3.jl
+cd JSON3.jl
+julia-purifier lock
+```
+
+The lock resolves the project, writes `Manifest.toml` and
+`julia-purifier.lock.json`, and records the test environment. Copy both files
+into the directory of your flake:
+
+```zsh
+mkdir ../json3-flake
+cp Manifest.toml julia-purifier.lock.json ../json3-flake/
+```
+
+The flake in `../json3-flake/flake.nix` takes JSON3.jl as a source and builds
+it from those files:
+
+```nix
+{
+  inputs.julia-purifier.url = "github:nix-purifiers/julia-purifier";
+  inputs.nixpkgs.follows = "julia-purifier/nixpkgs";
+  inputs.json3 = {
+    url = "github:quinnj/JSON3.jl";
+    flake = false;
+  };
+
+  outputs = { nixpkgs, julia-purifier, json3, ... }:
+    let
+      system = "x86_64-linux";
+      pkgs = nixpkgs.legacyPackages.${system};
+      project = julia-purifier.lib.julia-purifier.buildJuliaProject {
+        inherit pkgs;
+        src = json3;
+        manifestFile = ./Manifest.toml;
+        lockFile = ./julia-purifier.lock.json;
+      };
+    in
+    {
+      packages.${system}.default = project.packages.JSON3;
+      checks.${system}.tests = project.tests;
+    };
+}
+```
+
+Then `nix flake check` runs the test suite of JSON3.jl in the sandbox, and
+`nix build` builds the package. After you change the version of JSON3.jl in
+the flake, run `julia-purifier lock` in a clone at that version and copy the
+two files again.
 
 ## Credits
 
