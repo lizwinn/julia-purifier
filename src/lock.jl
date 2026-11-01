@@ -4,7 +4,12 @@
 # that Nix can build the project offline in its sandbox.
 #
 # Usage: julia lock.jl [<project directory>] [--lockfile <path>]
-#                      [--update [<package>...]]
+#                      [--tool-lockfile <path>] [--update [<package>...]]
+#
+# With --tool-lockfile, the Manifest.toml is kept at that path, outside the
+# project: the script reads and writes it there and leaves the manifest in
+# the project as it is. When the file does not exist yet, the script starts
+# from the manifest in the project.
 #
 # With --update, Pkg updates the named packages (or every package) first,
 # as `julia-purifier update` asks; without it, the lock keeps the
@@ -716,14 +721,46 @@ function main(project_arg, lockfile_arg = nothing, update = nothing)
     return
 end
 
+# The Manifest.toml of a project directory: the one that Pkg reads, which is
+# Manifest-v<major>.<minor>.toml when that file exists.
+function manifest_path(dir)
+    versioned = joinpath(dir, "Manifest-v$(VERSION.major).$(VERSION.minor).toml")
+    return isfile(versioned) ? versioned : joinpath(dir, "Manifest.toml")
+end
+
+# Runs `f` with the Manifest.toml kept at `tool_lockfile`, outside the
+# project. Pkg resolves in place, so the outside copy takes the place of the
+# manifest in the tree while `f` runs, and the result is written back to the
+# outside copy. The manifest of the tree is the same afterwards. When the
+# outside copy does not exist yet, `f` starts from the manifest of the tree.
+function with_tool_lockfile(f, dir, tool_lockfile)
+    tool_lockfile === nothing && return f()
+    outside = abspath(tool_lockfile)
+    inside = manifest_path(abspath(dir))
+    original = isfile(inside) ? read(inside) : nothing
+    isfile(outside) && cp(outside, inside; force = true)
+    try
+        f()
+        mkpath(dirname(outside))
+        isfile(inside) && cp(inside, outside; force = true)
+    finally
+        if original === nothing
+            rm(inside; force = true)
+        else
+            write(inside, original)
+        end
+    end
+    return
+end
+
 end
 
 # tests/lock-unit.jl includes this file for its functions; run as a
 # program, it locks the project.
 if abspath(PROGRAM_FILE) == @__FILE__
     # Usage: julia lock.jl [<project directory>] [--lockfile <path>]
-    #                      [--update [<package>...]]
-    let args = copy(ARGS), lockfile = nothing, update = nothing
+    #                      [--tool-lockfile <path>] [--update [<package>...]]
+    let args = copy(ARGS), lockfile = nothing, tool_lockfile = nothing, update = nothing
         u = findfirst(==("--update"), args)
         if u !== nothing
             update = args[(u + 1):end]
@@ -734,6 +771,14 @@ if abspath(PROGRAM_FILE) == @__FILE__
             lockfile = args[i + 1]
             deleteat!(args, i:(i + 1))
         end
-        JuliaPurifierLock.main(isempty(args) ? "." : args[1], lockfile, update)
+        t = findfirst(==("--tool-lockfile"), args)
+        if t !== nothing
+            tool_lockfile = args[t + 1]
+            deleteat!(args, t:(t + 1))
+        end
+        project = isempty(args) ? "." : args[1]
+        JuliaPurifierLock.with_tool_lockfile(project, tool_lockfile) do
+            JuliaPurifierLock.main(project, lockfile, update)
+        end
     end
 end

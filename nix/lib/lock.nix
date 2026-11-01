@@ -51,7 +51,7 @@
   lockFile ? src + "/julia-purifier.lock.json",
   # The manifest, when it is not in `src`: Julia packages often keep their
   # Manifest.toml out of version control, beside the lockfile.
-  manifestFile ? null,
+  manifest ? null,
 }:
 let
   relock = "run `julia-purifier lock` in the project to renew it";
@@ -93,17 +93,17 @@ let
     builtins.filter (lib.hasPrefix "Manifest") (builtins.attrNames (parsed.inputs or { }))
     ++ [ "Manifest.toml" ]
   );
-  manifest = if manifestFile != null then manifestFile else src + "/${manifestName}";
+  manifestPath = if manifest != null then manifest else src + "/${manifestName}";
 
   # The path of a file the lock was made from.
-  inputPath = f: if f == manifestName then manifest else src + "/${f}";
+  inputPath = f: if f == manifestName then manifestPath else src + "/${f}";
   stale = builtins.filter (
     f:
     !builtins.pathExists (inputPath f) || builtins.hashFile "sha256" (inputPath f) != parsed.inputs.${f}
   ) (builtins.attrNames parsed.inputs);
 
-  projectManifest = builtins.addErrorContext "while parsing ${toString manifest}; ${relock}" (
-    builtins.fromTOML (builtins.readFile manifest)
+  projectManifest = builtins.addErrorContext "while parsing ${toString manifestPath}; ${relock}" (
+    builtins.fromTOML (builtins.readFile manifestPath)
   );
 
   # The packages a manifest pins by tree hash. Packages with a path are part
@@ -146,8 +146,8 @@ let
       }; this julia-purifier reads format ${toString format}, so ${relock}."
     else if stale != [ ] then
       "julia-purifier: ${lib.concatStringsSep ", " stale} changed since ${name} was made; ${relock}."
-    else if !builtins.pathExists manifest then
-      "julia-purifier: ${toString manifest} does not exist; ${relock}."
+    else if !builtins.pathExists manifestPath then
+      "julia-purifier: ${toString manifestPath} does not exist; ${relock}."
     else if unhashed != [ ] then
       "julia-purifier: ${name} has no hash for ${lib.concatStringsSep ", " unhashed}, which the project pins; ${relock}."
     else
@@ -276,6 +276,7 @@ in
     inherit (parsed) tests editor;
     systems = builtins.attrNames parsed.artifacts;
     version = projectManifest.julia_version;
-    inherit manifest manifestName projects;
+    inherit manifestName projects;
+    manifest = manifestPath;
   };
 }

@@ -76,8 +76,13 @@ writeShellApplication {
       printf '%s\n' "$dir"
     }
 
+    # The Manifest.toml of a project: the one named by --tool-lockfile or
+    # JULIA_PURIFIER_TOOL_LOCKFILE when it exists, and otherwise the one in
+    # the project directory.
     manifest_of() {
-      if [ -f "$1/Manifest.toml" ]; then
+      if [ -n "$tool_arg" ] && [ -f "$tool_arg" ]; then
+        printf '%s\n' "$tool_arg"
+      elif [ -f "$1/Manifest.toml" ]; then
         printf '%s\n' "$1/Manifest.toml"
       else
         compgen -G "$1/Manifest-v*.toml" | head -n1
@@ -125,7 +130,7 @@ writeShellApplication {
     # The project root with a lockfile, from the current directory, and the
     # lockfile: --lockfile, or julia-purifier.lock.json in the root.
     locked_root() {
-      root="$(find_root .)" || {
+      root="$(if [ -n "$tool_arg" ]; then find_project .; else find_root .; fi)" || {
         echo "julia-purifier: no Manifest.toml here or above; run \`julia-purifier lock\` in the project" >&2
         exit 1
       }
@@ -155,11 +160,12 @@ writeShellApplication {
       if [ "$(cat "$state/stamp" 2> /dev/null || true)" != "$stamp" ] || [ ! -e "$prefetched" ]; then
         echo "julia-purifier: prefetching the locked downloads of $root" >&2
         mkdir -p "$state"
-        if ! JP_NIXPKGS="$nixpkgs" JP_SYSTEM="$system" JP_ROOT="$root" JP_LOCK="$lockfile" nix build --impure --out-link "$prefetched" --expr "
+        if ! JP_NIXPKGS="$nixpkgs" JP_SYSTEM="$system" JP_ROOT="$root" JP_LOCK="$lockfile" JP_MANIFEST="''${tool_arg:+$(manifest_of "$root")}" nix build --impure --out-link "$prefetched" --expr "
           import $lib/prefetch.nix {
             pkgs = import (builtins.getEnv \"JP_NIXPKGS\") { system = builtins.getEnv \"JP_SYSTEM\"; };
             src = /. + builtins.getEnv \"JP_ROOT\";
             lockFile = /. + builtins.getEnv \"JP_LOCK\";
+            manifest = if builtins.getEnv \"JP_MANIFEST\" == \"\" then null else /. + builtins.getEnv \"JP_MANIFEST\";
             flakeLock = $flake_lock;
           }
         "; then
@@ -177,10 +183,17 @@ writeShellApplication {
     if [ -n "''${JULIA_PURIFIER_LOCKFILE:-}" ]; then
       lockfile_arg="$(realpath -m "$JULIA_PURIFIER_LOCKFILE")"
     fi
-    if [ "''${1:-}" = --lockfile ]; then
-      lockfile_arg="$(realpath -m "''${2:?--lockfile needs a path}")"
-      shift 2
+    tool_arg=
+    if [ -n "''${JULIA_PURIFIER_TOOL_LOCKFILE:-}" ]; then
+      tool_arg="$(realpath -m "$JULIA_PURIFIER_TOOL_LOCKFILE")"
     fi
+    while [ "''${1:-}" = --lockfile ] || [ "''${1:-}" = --tool-lockfile ]; do
+      case "$1" in
+        --lockfile) lockfile_arg="$(realpath -m "''${2:?--lockfile needs a path}")" ;;
+        --tool-lockfile) tool_arg="$(realpath -m "''${2:?--tool-lockfile needs a path}")" ;;
+      esac
+      shift 2
+    done
 
     case "$cmd" in
       lock | update)
@@ -204,7 +217,8 @@ writeShellApplication {
         # A fresh depot, so that every file Pkg needs is downloaded and
         # recorded. The trailing ":" keeps Julia's own depots after it.
         JULIA_DEPOT_PATH="$depot:" "$julia/bin/julia" --startup-file=no "$lock_jl" "$root" \
-          ''${lockfile_arg:+--lockfile "$lockfile_arg"} "''${update[@]}"
+          ''${lockfile_arg:+--lockfile "$lockfile_arg"} \
+          ''${tool_arg:+--tool-lockfile "$tool_arg"} "''${update[@]}"
         ;;
 
       prefetch)
@@ -298,7 +312,7 @@ writeShellApplication {
           (buildJuliaProject {
             inherit src;
             lockFile = /. + builtins.getEnv \"JP_LOCK\";
-            manifestFile = /. + builtins.getEnv \"JP_MANIFEST\";
+            manifest = /. + builtins.getEnv \"JP_MANIFEST\";
           }).release
         ")"
         # Each released package must be the committed tree of its

@@ -71,10 +71,10 @@
   fetchers ? { },
   # The lockfile. A lockfile kept outside `src` replaces any copy in it.
   lockFile ? src + "/julia-purifier.lock.json",
-  # The manifest, when it is not in `src`. Julia packages often keep their
-  # Manifest.toml out of version control; a build then takes it from
-  # beside the lockfile.
-  manifestFile ? null,
+  # The Manifest.toml, which defaults to the copy in `src`. A copy kept
+  # outside `src`, such as one beside an external lockfile, replaces the one
+  # in `src` for the build.
+  manifest ? null,
   # The Julia that builds and runs the project. The default is the
   # nixpkgs Julia of the major and minor version the lock was made with.
   julia ? null,
@@ -90,7 +90,7 @@ let
   system = stdenvNoCC.hostPlatform.system;
   lock = purifier.checkLock (
     import ./lock.nix { inherit lib; } {
-      inherit src lockFile manifestFile;
+      inherit src lockFile manifest;
     }
   );
   l = lock.julia // {
@@ -105,15 +105,15 @@ let
 
   # The project as Julia sees it: `src`, with the manifest beside its
   # Project.toml when the manifest is kept elsewhere. Evaluation reads the
-  # files from `src` and `manifestFile`; only builds use this copy.
+  # files from `src` and `manifest`; only builds use this copy.
   projectSrc =
-    if manifestFile == null then
+    if manifest == null then
       src
     else
       runCommand "julia-project-source" { } ''
         cp -r ${src} "$out"
         chmod -R u+w "$out"
-        cp ${manifestFile} "$out/${l.manifestName}"
+        cp ${manifest} "$out/${l.manifestName}"
       '';
 
   juliaVersion = lib.splitVersion l.julia;
@@ -135,17 +135,15 @@ let
   downloads = purifier.tree (
     {
       # The packages that the shared library builds the downloads with.
-      pkgs = {
-        inherit
-          runCommand
-          writeText
-          unzip
-          zstd
-          python3
-          fetchurl
-          fetchgit
-          ;
-      };
+      inherit
+        runCommand
+        writeText
+        unzip
+        zstd
+        python3
+        fetchurl
+        fetchgit
+        ;
       name = "julia-purifier-downloads";
       entries = l.downloads;
     }
@@ -171,7 +169,7 @@ let
 
   # The manifest is copied to the store on its own, so the depot does not
   # depend on the rest of the source.
-  manifest = builtins.path {
+  manifestStore = builtins.path {
     path = l.manifest;
     name = "Manifest.toml";
   };
@@ -200,7 +198,7 @@ let
         julia --startup-file=no ${./place.jl} ${downloads} "$out" "$placementsPath" > builds
         chmod -R u+w "$out"
 
-        julia --startup-file=no ${./deps-env.jl} ${manifest} deps
+        julia --startup-file=no ${./deps-env.jl} ${manifestStore} deps
         deps="$PWD/deps"
         julia --startup-file=no --project="$deps" -e 'using Pkg; Pkg.instantiate()'
         # Each deps/build.jl runs from its deps directory, in the environment

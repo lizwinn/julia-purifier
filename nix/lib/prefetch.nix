@@ -13,6 +13,8 @@
   src,
   # The lockfile, when it is not in `src`.
   lockFile ? src + "/julia-purifier.lock.json",
+  # The Manifest.toml, when it is kept outside `src`.
+  manifest ? null,
   # This flake's flake.lock, which pins the shared purifier library.
   flakeLock,
 }:
@@ -22,7 +24,7 @@ let
     inherit flakeLock;
   };
   buildJuliaProject = pkgs.callPackage ./build-julia-project.nix { inherit purifier; };
-  project = buildJuliaProject { inherit src lockFile; };
+  project = buildJuliaProject { inherit src lockFile manifest; };
 in
 pkgs.runCommand "julia-purifier-prefetch" { } ''
   mkdir -p "$out"

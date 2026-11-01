@@ -21,8 +21,10 @@ nix run github:nix-purifiers/julia-purifier -- lock
 ```
 
 This writes `julia-purifier.lock.json` beside the manifest. A project without
-a manifest gets one, because the lock resolves the project first. Commit both
-files.
+a manifest gets one, because the lock resolves the project first. We
+recommend committing both files, `Manifest.toml` and
+`julia-purifier.lock.json`, to the repository. That is the default setup, and
+the flake below builds from it.
 
 To build the project in a flake, apply the overlay of julia-purifier to a
 package set. The overlay adds `buildJuliaProject` to the package set, and a
@@ -58,9 +60,8 @@ from the package set, such as `julia_113-bin`. The builder takes
   workspace)
 - `lockFile`, which defaults to `julia-purifier.lock.json` in `src`. A
   lockfile outside `src` takes the place of any lockfile in it
-- `manifestFile`, when the manifest is not in `src`. Julia packages often keep
-  Manifest.toml out of version control; a flake can keep the manifest and the
-  lockfile beside the package instead
+- `manifest`, which defaults to the `Manifest.toml` in `src`. A copy kept
+  outside `src` takes the place of the one in `src` for the build
 - `fetchers`, which goes unchanged to `fetchEntry` and `tree` of the shared
   library. A company mirror or credentials go into `fetchers.fetchurl`
 - `julia`, the Julia to build with. The default is the `julia_1XY-bin` of the
@@ -98,7 +99,7 @@ The result has these attributes, all known at evaluation time:
 - `editor`: the environment of the language server (see Editor)
 
 The library of the flake holds
-`lib.julia-purifier.readLock { src, lockFile ? ..., manifestFile ? null }`,
+`lib.julia-purifier.readLock { src, lockFile ? ..., manifest ? null }`,
 which reads the manifest and the lockfile into the shared shape
 `{ purifier; entries; outputs; problems; }`. A stale, tampered, malformed or
 incomplete lockfile shows up in `problems`, and the builder fails
@@ -139,10 +140,15 @@ program that runs Pkg and records what Pkg downloaded:
   which accepts versions through its Registrator bot, register the commit
   that this command has built.
 
-A lockfile kept outside the project is named by `--lockfile <path>`, right
-after the name of the command, or by the environment variable
-`JULIA_PURIFIER_LOCKFILE`. The flag takes precedence over the variable, and
-both take precedence over the lockfile beside the manifest.
+A build can instead keep its lockfiles outside the repository. The
+purifier lockfile is then named by `--lockfile <path>`, right after the name
+of the command, or by the environment variable `JULIA_PURIFIER_LOCKFILE`.
+The `Manifest.toml` is named by `--tool-lockfile <path>` or by
+`JULIA_PURIFIER_TOOL_LOCKFILE`. With either one, `lock` and `update` read and
+write the file there and leave the copy in the tree as it is. When the file
+does not exist yet, they start from the copy in the tree. A flag takes
+precedence over its variable, and both take precedence over the files in the
+tree.
 
 ## Working offline
 
@@ -231,8 +237,10 @@ credentials.
 ## Examples
 
 This example builds and tests [JSON3.jl](https://github.com/quinnj/JSON3.jl),
-a package you do not own, from a flake of your own. JSON3.jl commits no
-Manifest.toml, so the flake keeps the manifest and the lockfile beside it.
+a package you do not own, from a flake of your own. You cannot commit files
+to the repository of JSON3.jl, so this is an external build: the flake keeps
+the `Manifest.toml` and the lockfile beside it. A project in your own
+repository commits both files and builds as in the Quickstart.
 
 Lock the package. In a clone of JSON3.jl, run
 
@@ -272,7 +280,7 @@ it from those files:
       };
       project = pkgs.buildJuliaProject {
         src = json3;
-        manifestFile = ./Manifest.toml;
+        manifest = ./Manifest.toml;
         lockFile = ./julia-purifier.lock.json;
       };
     in

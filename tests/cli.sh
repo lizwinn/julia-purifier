@@ -236,10 +236,16 @@ step_external() {
   mkdir -p "$work/external"
   fixture app external/app
   mv "$work/external/app/julia-purifier.lock.json" "$work/external/julia-purifier.lock.json"
-  "$cli" lock --lockfile "$work/external/julia-purifier.lock.json" "$work/external/app"
+  # The Manifest.toml of the tree stays as it is, and the one outside the
+  # tree starts as a copy of it.
+  "$cli" lock --lockfile "$work/external/julia-purifier.lock.json" \
+    --tool-lockfile "$work/external/Manifest.toml" "$work/external/app"
   cmp "$repo/tests/fixtures/app/julia-purifier.lock.json" "$work/external/julia-purifier.lock.json"
+  cmp "$repo/tests/fixtures/app/Manifest.toml" "$work/external/app/Manifest.toml"
+  cmp "$repo/tests/fixtures/app/Manifest.toml" "$work/external/Manifest.toml"
   cd "$work/external/app"
   out="$(JULIA_PURIFIER_LOCKFILE="$work/external/julia-purifier.lock.json" \
+    JULIA_PURIFIER_TOOL_LOCKFILE="$work/external/Manifest.toml" \
     "$cli" julia -e 'using HelloPurifier; print(HelloPurifier.greeting("ext"))')"
   [ "$out" = '{"greeting":"Hello, ext","utf16le":6}' ] || {
     echo "unexpected output: $out" >&2

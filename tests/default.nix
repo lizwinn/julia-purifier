@@ -44,7 +44,7 @@ let
   # Zstandard binary artifacts, and JSON3's ArrowTypes extension.
   realworld = build {
     src = json3;
-    manifestFile = ./realworld/JSON3/Manifest.toml;
+    manifest = ./realworld/JSON3/Manifest.toml;
     lockFile = ./realworld/JSON3/julia-purifier.lock.json;
   };
 
@@ -113,14 +113,20 @@ let
     (builtins.head (builtins.fromTOML (builtins.readFile ./fixtures/app/Manifest.toml)).deps.JSON)
     ."git-tree-sha1";
 
-  # The app fixture with only the build tool's own files, and its lockfile
-  # beside it rather than in it.
+  # The app fixture with its lockfile and its Manifest.toml kept outside the
+  # source, which holds only the other files of the project.
   appExternal = build {
     src = lib.fileset.toSource {
       root = ./fixtures/app;
-      fileset = lib.fileset.difference ./fixtures/app ./fixtures/app/julia-purifier.lock.json;
+      fileset = lib.fileset.difference ./fixtures/app (
+        lib.fileset.unions [
+          ./fixtures/app/julia-purifier.lock.json
+          ./fixtures/app/Manifest.toml
+        ]
+      );
     };
     lockFile = ./fixtures/app/julia-purifier.lock.json;
+    manifest = ./fixtures/app/Manifest.toml;
   };
 
   # What `julia-purifier prefetch` realizes for the app fixture.
