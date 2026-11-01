@@ -2,21 +2,32 @@
 #
 # The julia-purifier command.
 #
-#   julia-purifier lock [dir]       records every file Pkg downloads for the
-#                                   project in julia-purifier.lock.toml
-#   julia-purifier julia [args...]  runs Julia on the project's locked
-#                                   dependencies, offline
-#   julia-purifier env              prints that environment as shell
-#                                   exports, for direnv and editors
-#   julia-purifier register <registry> [--push] [dir]
-#                                   builds and tests the committed project
-#                                   with Nix, then registers its version
+#   julia-purifier lock [dir]        records every file Pkg downloads for
+#                                    the project in julia-purifier.lock.json,
+#                                    keeping the manifest's resolution
+#   julia-purifier update [pkg...]   updates the named packages (or every
+#                                    package) with Pkg, then locks
+#   julia-purifier prefetch [dir]    realizes what development needs offline
+#                                    (dependencies, test dependencies,
+#                                    registries, Julia, the language server),
+#                                    with a GC root in .julia-purifier/
+#                                    beside the lockfile
+#   julia-purifier publish <registry> [--push] [dir]
+#                                    builds and tests the committed project
+#                                    with Nix, then registers its packages
+#   julia-purifier julia [args...]   runs Julia on the prefetched downloads
+#   julia-purifier env               prints that environment as exports
+#   julia-purifier language-server   runs LanguageServer.jl for an editor
 #
-# The commands take the Julia of the major and minor version the manifest
-# records, from the nixpkgs this package was built from.
+# A lockfile kept outside the project is named by JULIA_PURIFIER_LOCKFILE or,
+# taking precedence, by --lockfile <path>. Every command takes --lockfile
+# right after its name. The commands take the Julia of
+# the major and minor version the manifest records, from the nixpkgs this
+# package was built from.
 {
   writeShellApplication,
   coreutils,
+  findutils,
   gnugrep,
   gnused,
   git,
@@ -30,6 +41,7 @@ writeShellApplication {
   name = "julia-purifier";
   runtimeInputs = [
     coreutils
+    findutils
     gnugrep
     gnused
     git
@@ -43,10 +55,11 @@ writeShellApplication {
     # evaluations below.
     flake_lock=${../../flake.lock}
     lock_jl=${../../src/lock.jl}
-    register_jl=${../../src/register.jl}
+    publish_jl=${../../src/publish.jl}
+    language_server_jl=${../../src/language-server.jl}
 
     usage() {
-      sed -n 's/^# \{0,1\}//; 4,15p' ${./default.nix} >&2
+      sed -n 's/^# \{0,1\}//; 4,26p' ${./default.nix} >&2
       exit 2
     }
 
@@ -109,45 +122,80 @@ writeShellApplication {
       '
     }
 
-    # Builds the locked dependencies of $root into a cache under
-    # $XDG_CACHE_HOME/julia-purifier, with a GC root, and sets $cache to it.
-    # The stamp covers the files a lock is made from (the manifest and every
-    # Project.toml), so that a change to any of them is checked against the
-    # lockfile again.
-    prepare_interactive() {
-      local stamp
-      cache="''${XDG_CACHE_HOME:-$HOME/.cache}/julia-purifier/$(printf '%s' "$root" | sha256sum | cut -c1-32)"
+    # The project root with a lockfile, from the current directory, and the
+    # lockfile: --lockfile, or julia-purifier.lock.json in the root.
+    locked_root() {
+      root="$(find_root .)" || {
+        echo "julia-purifier: no Manifest.toml here or above; run \`julia-purifier lock\` in the project" >&2
+        exit 1
+      }
+      lockfile="''${lockfile_arg:-$root/julia-purifier.lock.json}"
+      [ -f "$lockfile" ] || {
+        echo "julia-purifier: $lockfile does not exist; run \`julia-purifier lock\` in the project" >&2
+        exit 1
+      }
+    }
+
+    # Realizes the prefetch of $root in the store, with a GC root at
+    # .julia-purifier/prefetch beside the lockfile, and sets $prefetched to
+    # it. The stamp
+    # covers the files a lock is made from (the lockfile, the manifest and
+    # every Project.toml), so that a change to any of them is checked against
+    # the lockfile again.
+    prefetch() {
+      local stamp state
+      state="$(dirname "$lockfile")/.julia-purifier"
+      prefetched="$state/prefetch"
       stamp="$(
         {
-          cat "$root/julia-purifier.lock.toml" "$(manifest_of "$root")"
-          find "$root" -name Project.toml -not -path '*/.git/*' -print0 | sort -z | xargs -0 cat
+          cat "$lockfile" "$(manifest_of "$root")"
+          find "$root" -name Project.toml -not -path '*/.git/*' -not -path '*/.julia-purifier/*' -print0 | sort -z | xargs -0 cat
         } | sha256sum | cut -d' ' -f1
       )"
-      if [ "$(cat "$cache/stamp" 2> /dev/null || true)" != "$stamp" ]; then
-        echo "julia-purifier: building the locked dependencies of $root" >&2
-        mkdir -p "$cache"
-        if ! JP_NIXPKGS="$nixpkgs" JP_SYSTEM="$system" JP_ROOT="$root" nix build --impure --out-link "$cache/interactive" --expr "
-          import $lib/interactive.nix {
+      if [ "$(cat "$state/stamp" 2> /dev/null || true)" != "$stamp" ] || [ ! -e "$prefetched" ]; then
+        echo "julia-purifier: prefetching the locked downloads of $root" >&2
+        mkdir -p "$state"
+        if ! JP_NIXPKGS="$nixpkgs" JP_SYSTEM="$system" JP_ROOT="$root" JP_LOCK="$lockfile" nix build --impure --out-link "$prefetched" --expr "
+          import $lib/prefetch.nix {
             pkgs = import (builtins.getEnv \"JP_NIXPKGS\") { system = builtins.getEnv \"JP_SYSTEM\"; };
             src = /. + builtins.getEnv \"JP_ROOT\";
+            lockFile = /. + builtins.getEnv \"JP_LOCK\";
             flakeLock = $flake_lock;
           }
         "; then
           echo "julia-purifier: the lockfile does not build; run \`julia-purifier lock\` to renew it, or set JULIA_PURIFIER=0" >&2
           exit 1
         fi
-        printf '%s\n' "$stamp" > "$cache/stamp"
+        printf '%s\n' "$stamp" > "$state/stamp"
       fi
     }
 
     cmd="''${1:-}"
     [ -n "$cmd" ] || usage
     shift
+    lockfile_arg=
+    if [ -n "''${JULIA_PURIFIER_LOCKFILE:-}" ]; then
+      lockfile_arg="$(realpath -m "$JULIA_PURIFIER_LOCKFILE")"
+    fi
+    if [ "''${1:-}" = --lockfile ]; then
+      lockfile_arg="$(realpath -m "''${2:?--lockfile needs a path}")"
+      shift 2
+    fi
 
     case "$cmd" in
-      lock)
-        root="$(find_project "''${1:-.}")" || {
-          echo "julia-purifier: no Project.toml in ''${1:-.} or above; run the lock in a Julia project" >&2
+      lock | update)
+        # `lock` takes the project directory; `update` runs in the current
+        # directory and takes the packages to update, or none for every
+        # package.
+        if [ "$cmd" = lock ]; then
+          dir="''${1:-.}"
+          update=()
+        else
+          dir=.
+          update=(--update "$@")
+        fi
+        root="$(find_project "$dir")" || {
+          echo "julia-purifier: no Project.toml in $dir or above; run the $cmd in a Julia project" >&2
           exit 1
         }
         julia="$(julia_for "$root")"
@@ -155,46 +203,67 @@ writeShellApplication {
         trap 'chmod -R u+w "$depot"; rm -rf "$depot"' EXIT
         # A fresh depot, so that every file Pkg needs is downloaded and
         # recorded. The trailing ":" keeps Julia's own depots after it.
-        JULIA_DEPOT_PATH="$depot:" "$julia/bin/julia" --startup-file=no "$lock_jl" "$root"
+        JULIA_DEPOT_PATH="$depot:" "$julia/bin/julia" --startup-file=no "$lock_jl" "$root" \
+          ''${lockfile_arg:+--lockfile "$lockfile_arg"} "''${update[@]}"
+        ;;
+
+      prefetch)
+        if [ -n "''${1:-}" ]; then
+          cd "$1"
+        fi
+        locked_root
+        prefetch
+        echo "julia-purifier: $root works offline with its locked downloads; the GC root is $prefetched" >&2
         ;;
 
       julia)
         # Without a lockfile (or with JULIA_PURIFIER=0) this is plain Julia:
         # the manifest's Julia where there is a manifest, nixpkgs' default
         # Julia otherwise.
-        if [ "''${JULIA_PURIFIER:-1}" = 0 ] || ! root="$(find_root .)" || [ ! -f "$root/julia-purifier.lock.toml" ]; then
+        if [ "''${JULIA_PURIFIER:-1}" = 0 ] || ! root="$(find_root .)" || [ ! -f "''${lockfile_arg:-$root/julia-purifier.lock.json}" ]; then
           if [ -n "''${root:-}" ] && julia="$(julia_for "$root")"; then
             exec "$julia/bin/julia" "$@"
           fi
           exec ${julia-bin}/bin/julia "$@"
         fi
-        prepare_interactive
+        locked_root
+        prefetch
         # The user's own depot comes first (the leading ":"), where Julia
-        # writes; the locked dependencies come after it.
-        export JULIA_DEPOT_PATH=":$cache/interactive/depot"
+        # writes; the locked downloads come after it.
+        export JULIA_DEPOT_PATH=":$prefetched/depot"
         export JULIA_PKG_OFFLINE="''${JULIA_PKG_OFFLINE:-true}"
-        exec "$cache/interactive/julia/bin/julia" --project="$root" "$@"
+        exec "$prefetched/julia/bin/julia" --project="$root" "$@"
         ;;
 
       env)
-        # For direnv, an editor or a language server, which start `julia`
-        # themselves: the environment `julia-purifier julia` runs Julia in.
-        root="$(find_root .)" && [ -f "$root/julia-purifier.lock.toml" ] || {
-          echo "julia-purifier: no julia-purifier.lock.toml here or above; run \`julia-purifier lock\` in the project" >&2
-          exit 1
-        }
-        prepare_interactive
-        printf 'export JULIA_DEPOT_PATH=%q\n' ":$cache/interactive/depot"
+        # For direnv, an editor or a shell, which start `julia` themselves:
+        # the environment `julia-purifier julia` runs Julia in.
+        locked_root
+        prefetch
+        printf 'export JULIA_DEPOT_PATH=%q\n' ":$prefetched/depot"
         printf 'export JULIA_PKG_OFFLINE=true\n'
         printf 'export JULIA_PROJECT=%q\n' "$root"
-        printf 'export PATH=%q\n' "$cache/interactive/julia/bin:$PATH"
+        printf 'export PATH=%q\n' "$prefetched/julia/bin:$PATH"
         ;;
 
-      register)
+      language-server)
+        # LanguageServer.jl on stdin and stdout, for an editor, from the
+        # prefetched editor environment. Its index goes under
+        # $XDG_CACHE_HOME/julia-purifier.
+        locked_root
+        prefetch > /dev/null
+        store="''${XDG_CACHE_HOME:-$HOME/.cache}/julia-purifier/language-server/$(printf '%s' "$root" | sha256sum | cut -c1-32)"
+        export JULIA_DEPOT_PATH=":$prefetched/editor/depot:$prefetched/depot"
+        export JULIA_PKG_OFFLINE=true
+        exec "$prefetched/julia/bin/julia" --startup-file=no --history-file=no \
+          --project="$prefetched/editor/env" "$language_server_jl" "$root" "$store"
+        ;;
+
+      publish)
         registry="''${1:-}"
         [ -n "$registry" ] || usage
         shift
-        push=
+        push=no
         if [ "''${1:-}" = --push ]; then
           push=push
           shift
@@ -203,29 +272,53 @@ writeShellApplication {
           echo "julia-purifier: no Manifest.toml in ''${1:-.} or above" >&2
           exit 1
         }
-        if [ -n "$(git -C "$root" status --porcelain -- .)" ]; then
+        if [ -n "$(git -C "$root" status --porcelain --untracked-files=no -- .)" ]; then
           echo "julia-purifier: $root has uncommitted changes; a registry records the committed tree" >&2
           exit 1
         fi
         top="$(git -C "$root" rev-parse --show-toplevel)"
         rev="$(git -C "$root" rev-parse HEAD)"
         sub="$(realpath --relative-to="$top" "$root")"
-        echo "julia-purifier: building and testing $rev:$sub with Nix" >&2
-        JP_NIXPKGS="$nixpkgs" JP_SYSTEM="$system" JP_TOP="$top" JP_REV="$rev" JP_SUB="$sub" nix build --impure --no-link --expr "
+        lockfile="''${lockfile_arg:-$root/julia-purifier.lock.json}"
+        manifest="$(manifest_of "$root")"
+        echo "julia-purifier: building and testing the release of $rev:$sub with Nix" >&2
+        # The source is the committed tree. The lockfile and the manifest
+        # come from the working tree, where a package may keep them out of
+        # version control.
+        release="$(JP_NIXPKGS="$nixpkgs" JP_SYSTEM="$system" JP_TOP="$top" JP_REV="$rev" JP_SUB="$sub" JP_LOCK="$lockfile" JP_MANIFEST="$manifest" \
+          nix build --impure --no-link --print-out-paths --expr "
           let
             pkgs = import (builtins.getEnv \"JP_NIXPKGS\") { system = builtins.getEnv \"JP_SYSTEM\"; };
+            purifier = import $lib/purifier.nix { inherit (pkgs) lib; flakeLock = $flake_lock; };
+            buildJuliaProject = import $lib/build-julia-project.nix { inherit (pkgs) lib; inherit purifier; };
             repo = builtins.fetchGit { url = builtins.getEnv \"JP_TOP\"; rev = builtins.getEnv \"JP_REV\"; };
             sub = builtins.getEnv \"JP_SUB\";
             src = if sub == \".\" then repo else repo + \"/\" + sub;
-            purifier = import $lib/purifier.nix { inherit (pkgs) lib; flakeLock = $flake_lock; };
-            project = pkgs.callPackage $lib/build-julia-project.nix { inherit purifier; } { inherit src; doCheck = true; };
           in
-          builtins.attrValues project.packages
-        "
+          (buildJuliaProject {
+            inherit pkgs src;
+            lockFile = /. + builtins.getEnv \"JP_LOCK\";
+            manifestFile = /. + builtins.getEnv \"JP_MANIFEST\";
+          }).release
+        ")"
+        # Each released package must be the committed tree of its
+        # directory, which is what a registry records.
+        dirs=()
+        for tree_file in "$release"/*.tree-sha1; do
+          name="$(basename "$tree_file" .tree-sha1)"
+          dir="$(cat "$release/$name.dir")"
+          path="$sub/$dir"
+          committed="$(git -C "$top" rev-parse "$rev:$(realpath -m --relative-to=. "$path" | sed 's|^\./||; s|^\.$||')")"
+          if [ "$committed" != "$(cat "$tree_file")" ]; then
+            echo "julia-purifier: the release of $name ($(cat "$tree_file")) is not the committed tree $committed" >&2
+            exit 1
+          fi
+          dirs+=("$root/$dir")
+        done
         julia="$(julia_for "$root")"
         depot="$(mktemp -d)"
         trap 'chmod -R u+w "$depot"; rm -rf "$depot"' EXIT
-        JULIA_DEPOT_PATH="$depot:''${JULIA_DEPOT_PATH:-}" "$julia/bin/julia" --startup-file=no "$register_jl" "$root" "$registry" $push
+        JULIA_DEPOT_PATH="$depot:''${JULIA_DEPOT_PATH:-}" "$julia/bin/julia" --startup-file=no "$publish_jl" "$registry" "$push" "''${dirs[@]}"
         ;;
 
       *)

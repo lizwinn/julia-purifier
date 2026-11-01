@@ -1,24 +1,27 @@
 # SPDX-License-Identifier: MIT
 #
-# Damages a lockfile for the negative tests in tests/cli.sh.
+# Damages a lockfile for the negative tests in tests/cli.sh, and writes it
+# with a correct content hash, as a lock run would.
 #
-# Usage: julia edit-lock.jl <lockfile> drop <package name>
-#        julia edit-lock.jl <lockfile> tamper <package name>
+# Usage: julia edit-lock.jl <lockfile> <manifest> drop <package name>
+#        julia edit-lock.jl <lockfile> <manifest> tamper <package name>
 #
-# `drop` removes the download entry of the package; `tamper` replaces the
-# hash of that entry with the hash of an empty file.
+# The package is found by its tree hash in the manifest. `drop` removes the
+# hash of its tarball from the lockfile; `tamper` replaces it with the hash
+# of an empty file.
+include(joinpath(@__DIR__, "..", "src", "lock.jl"))
 using TOML
+const L = JuliaPurifierLock
 
-file, action, name = ARGS
-lock = TOML.parsefile(file)
-ofpackage(d) = startswith(d["path"], "packages/$name/")
+file, manifest, action, name = ARGS
+tree = TOML.parsefile(manifest)["deps"][name][1]["git-tree-sha1"]
+lock = L.parse_json(read(file, String))
+haskey(lock["packages"], tree) || error("the lockfile has no tarball of $name")
 if action == "drop"
-    lock["downloads"] = [d for d in lock["downloads"] if !ofpackage(d)]
+    delete!(lock["packages"], tree)
 elseif action == "tamper"
-    for d in lock["downloads"]
-        ofpackage(d) && (d["hash"] = "sha256-47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU=")
-    end
+    lock["packages"][tree] = "sha256-47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU="
 else
     error("unknown action $action")
 end
-open(io -> TOML.print(io, lock; sorted = true), file, "w")
+write(file, L.lock_text(lock))

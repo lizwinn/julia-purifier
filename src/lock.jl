@@ -3,25 +3,35 @@
 # `julia-purifier lock`: records every file Pkg downloads for a project, so
 # that Nix can build the project offline in its sandbox.
 #
-# Usage: julia lock.jl <project directory>
+# Usage: julia lock.jl [<project directory>] [--lockfile <path>]
+#                      [--update [<package>...]]
 #
-# The script runs with the network, in the fresh depot that DEPOT_PATH[1]
+# With --update, Pkg updates the named packages (or every package) first,
+# as `julia-purifier update` asks; without it, the lock keeps the
+# manifest's resolution as it is. The script runs with the network, in the fresh depot that DEPOT_PATH[1]
 # names. It instantiates the project there, resolves each test environment
-# Pkg would create for `Pkg.test`, and writes julia-purifier.lock.toml beside
-# the manifest. The lockfile holds:
+# Pkg would create for `Pkg.test`, and writes julia-purifier.lock.json beside
+# the manifest. The manifest names each package by its UUID and git tree
+# hash, and Nix reads it directly; the lockfile holds only what Nix needs
+# beyond the manifest:
 #
-#   downloads   the package sources, as the shared purifier library's
-#               archive entries (a tarball from the package server) and git
-#               entries (a checkout of the repository a package came from)
-#   links       where a package source inside a git checkout goes in the
-#               depot, as { from, to }
-#   artifacts   per Nix system, the artifacts the packages need on that
-#               system, as archive entries
-#   builds      the depot paths of packages with a deps/build.jl
+#   server      the package server the tarballs come from
+#   packages    per tree hash of a package from the package server, the Nix
+#               hash of its tarball
+#   git         per tree hash of a package from a repository, the HTTPS URL,
+#               the commit, the subdirectory and the Nix hash of the checkout
+#   artifacts   per Nix system, per artifact tree hash, the URL, mirrors and
+#               Nix hash of the artifact's tarball
+#   registries  per registry UUID, the name, tree hash and Nix hash of the
+#               registry tarball, which offline Pkg operations read
 #   tests       per project with a test target, the Project.toml and
-#               Manifest.toml of the environment Pkg.test runs in
-#   inputs      the SHA-256 of each file the lock was made from, so that a
-#               build notices a stale lockfile
+#               Manifest.toml of the environment Pkg.test runs in, which
+#               Pkg resolves apart from the project's manifest
+#   editor      the Project.toml and Manifest.toml of the language server's
+#               environment
+#   inputs      the SHA-256 of the manifest and each Project.toml, the files
+#               the test and editor environments were resolved against, so
+#               that a build notices a stale lockfile
 module JuliaPurifierLock
 
 using Pkg, TOML, SHA, Downloads, Base64
@@ -174,23 +184,6 @@ function git_source(url, tree, rev, subdir, work)
     end
 end
 
-git_entry(src::GitSource) = Dict(
-    "path" => "git/$(src.commit)",
-    "git" => Dict(
-        "url" => src.url,
-        "rev" => src.commit,
-        "submodules" => false,
-        "leaveDotGit" => false,
-    ),
-    "hash" => src.hash,
-)
-
-archive_entry(path, url, mirrors, hash) = Dict(
-    "path" => path,
-    "archive" => Dict("url" => url, "mirrors" => mirrors, "stripTop" => false),
-    "hash" => hash,
-)
-
 # The repository and subdirectory a registry names for a package, for
 # packages the package server does not serve (those of other registries).
 function registry_repo(uuid)
@@ -274,7 +267,259 @@ end
 
 relpath_or_dot(path, root) = (r = relpath(path, root); r == "." ? "." : r)
 
-function main(project_arg)
+const LOCKFILE = "julia-purifier.lock.json"
+const FORMAT = 2
+
+# JSON, written with sorted keys and two-space indentation. Julia's
+# standard library has no JSON module, and the lockfile needs only
+# strings, integers, booleans, null, arrays and objects.
+function json_string(io, s::AbstractString)
+    print(io, '"')
+    for c in s
+        if c == '"'
+            print(io, "\\\"")
+        elseif c == '\\'
+            print(io, "\\\\")
+        elseif c == '\n'
+            print(io, "\\n")
+        elseif c == '\t'
+            print(io, "\\t")
+        elseif c == '\r'
+            print(io, "\\r")
+        elseif c < ' '
+            print(io, "\\u", string(UInt16(c); base = 16, pad = 4))
+        else
+            print(io, c)
+        end
+    end
+    print(io, '"')
+end
+
+function json(io, x, indent, keyorder = nothing)
+    pad = "  "^indent
+    if x === nothing
+        print(io, "null")
+    elseif x isa Bool
+        print(io, x ? "true" : "false")
+    elseif x isa Integer
+        print(io, x)
+    elseif x isa AbstractString
+        json_string(io, x)
+    elseif x isa AbstractVector
+        if isempty(x)
+            print(io, "[]")
+        else
+            println(io, "[")
+            for (i, v) in enumerate(x)
+                print(io, pad, "  ")
+                json(io, v, indent + 1)
+                println(io, i < length(x) ? "," : "")
+            end
+            print(io, pad, "]")
+        end
+    elseif x isa AbstractDict
+        if isempty(x)
+            print(io, "{}")
+        else
+            keys_ = keyorder === nothing ? sort(collect(keys(x))) : keyorder
+            println(io, "{")
+            for (i, k) in enumerate(keys_)
+                print(io, pad, "  ")
+                json_string(io, k)
+                print(io, ": ")
+                json(io, x[k], indent + 1)
+                println(io, i < length(keys_) ? "," : "")
+            end
+            print(io, pad, "}")
+        end
+    else
+        error("julia-purifier: cannot write $(typeof(x)) as JSON")
+    end
+end
+
+# The lockfile's text. It starts with the format `version` and the `hash`
+# of its own content: the SHA-256 of the text with the hash's value empty.
+# nix/lib/lock.nix checks that hash before it parses the file, so an edited,
+# truncated or malformed lockfile fails with a message to relock.
+function lock_text(lock)
+    order = vcat(["version", "hash"], sort([k for k in keys(lock) if k ∉ ("version", "hash")]))
+    io = IOBuffer()
+    json(io, merge(lock, Dict("hash" => "")), 0, order)
+    println(io)
+    blank = String(take!(io))
+    hash = sri(bytes2hex(sha256(blank)))
+    return replace(blank, "\"hash\": \"\"" => "\"hash\": \"$hash\""; count = 1)
+end
+
+# The content of a lockfile whose content hash holds, or nothing.
+function read_lock(path)
+    isfile(path) || return nothing
+    text = read(path, String)
+    m = match(r"\"hash\": \"(sha256-[A-Za-z0-9+/=]+)\"", text)
+    m === nothing && return nothing
+    blank = replace(text, "\"hash\": \"$(m[1])\"" => "\"hash\": \"\""; count = 1)
+    sri(bytes2hex(sha256(blank))) == m[1] || return nothing
+    lock = parse_json(text)
+    get(lock, "version", nothing) == FORMAT || return nothing
+    return lock
+end
+
+# A reader for the JSON that `json` writes.
+function parse_json(text::String)
+    pos = Ref(1)
+    skip() = (while pos[] <= ncodeunits(text) && text[pos[]] in (' ', '\n', '\r', '\t'); pos[] = nextind(text, pos[]); end)
+    function value()
+        skip()
+        c = text[pos[]]
+        if c == '{'
+            pos[] += 1
+            d = Dict{String, Any}()
+            skip()
+            if text[pos[]] == '}'
+                pos[] += 1
+                return d
+            end
+            while true
+                skip()
+                k = value()
+                skip()
+                text[pos[]] == ':' || error("julia-purifier: malformed JSON at byte $(pos[])")
+                pos[] += 1
+                d[k] = value()
+                skip()
+                if text[pos[]] == ','
+                    pos[] += 1
+                elseif text[pos[]] == '}'
+                    pos[] += 1
+                    return d
+                else
+                    error("julia-purifier: malformed JSON at byte $(pos[])")
+                end
+            end
+        elseif c == '['
+            pos[] += 1
+            a = Any[]
+            skip()
+            if text[pos[]] == ']'
+                pos[] += 1
+                return a
+            end
+            while true
+                push!(a, value())
+                skip()
+                if text[pos[]] == ','
+                    pos[] += 1
+                elseif text[pos[]] == ']'
+                    pos[] += 1
+                    return a
+                else
+                    error("julia-purifier: malformed JSON at byte $(pos[])")
+                end
+            end
+        elseif c == '"'
+            io = IOBuffer()
+            i = pos[] + 1
+            while true
+                ch = text[i]
+                if ch == '"'
+                    pos[] = i + 1
+                    return String(take!(io))
+                elseif ch == '\\'
+                    e = text[i + 1]
+                    if e == 'u'
+                        write(io, Char(parse(UInt16, text[(i + 2):(i + 5)]; base = 16)))
+                        i += 6
+                    else
+                        write(io, Dict('n' => '\n', 't' => '\t', 'r' => '\r', '"' => '"', '\\' => '\\', '/' => '/', 'b' => '\b', 'f' => '\f')[e])
+                        i += 2
+                    end
+                else
+                    write(io, ch)
+                    i = nextind(text, i)
+                end
+            end
+        elseif startswith(SubString(text, pos[]), "true")
+            pos[] += 4
+            return true
+        elseif startswith(SubString(text, pos[]), "false")
+            pos[] += 5
+            return false
+        elseif startswith(SubString(text, pos[]), "null")
+            pos[] += 4
+            return nothing
+        else
+            m = match(r"-?[0-9]+", text, pos[])
+            (m === nothing || m.offset != pos[]) && error("julia-purifier: malformed JSON at byte $(pos[])")
+            pos[] += length(m.match)
+            return parse(Int, m.match)
+        end
+    end
+    return value()
+end
+
+# Installs a recorded environment (a test environment or the editor
+# environment) in the lock's depot, so that its packages can be hashed and
+# their artifacts selected. A recorded test environment names the project
+# as ../root, beside its own directory.
+function instantiate_recorded(env, root)
+    dir = mktempdir()
+    symlink(root, joinpath(dir, "root"))
+    envdir = joinpath(dir, "env")
+    mkpath(envdir)
+    write(joinpath(envdir, "Project.toml"), env["Project.toml"])
+    write(joinpath(envdir, "Manifest.toml"), env["Manifest.toml"])
+    Pkg.activate(envdir; io = devnull)
+    Pkg.instantiate()
+    return
+end
+
+# The environment of LanguageServer.jl, the language server that the Julia
+# editor plugins start.
+function editor_environment()
+    dir = mktempdir()
+    Pkg.activate(dir; io = devnull)
+    Pkg.add("LanguageServer")
+    manifest = read(joinpath(dir, "Manifest.toml"), String)
+    return Dict(
+        "Project.toml" => read(joinpath(dir, "Project.toml"), String),
+        "Manifest.toml" => replace(manifest, r"^project_hash = .*\n"m => ""),
+    )
+end
+
+# The registries in the lock's depot, by UUID: the name of each, its tree
+# hash and the hash of its tarball from the package server. The lock's
+# depot is fresh, so Pkg installs only the registries the package server
+# serves.
+function registry_entries()
+    dir = joinpath(DEPOT_PATH[1], "registries")
+    entries = Dict{String, Any}()
+    for f in sort(readdir(dir))
+        full = joinpath(dir, f)
+        if endswith(f, ".toml")
+            pointer = TOML.parsefile(full)
+            haskey(pointer, "path") || continue
+            # The package server sends a registry compressed as the client
+            # asks: zstd to Pkg, gzip to a plain request such as the one Nix
+            # makes. The lock records the hash of the gzip tarball, which
+            # Pkg reads by its extension.
+            url = "$SERVER/registry/$(pointer["uuid"])/$(pointer["git-tree-sha1"])"
+            file = Downloads.download(url)
+            magic = open(io -> read(io, 2), file)
+            magic == UInt8[0x1f, 0x8b] || error("julia-purifier: $(url) did not come gzip-compressed to a plain request")
+            entries[pointer["uuid"]] = Dict(
+                "name" => f[1:(end - 5)],
+                "tree" => pointer["git-tree-sha1"],
+                "hash" => sri(bytes2hex(open(sha256, file))),
+            )
+            rm(file)
+        elseif isdir(full)
+            error("julia-purifier: Pkg installed the registry $(f) as a git clone; the lock takes registries from a package server only")
+        end
+    end
+    return entries
+end
+
+function main(project_arg, lockfile_arg = nothing, update = nothing)
     root = abspath(project_arg)
     work = mktempdir()
     ENV["JULIA_PKG_PRECOMPILE_AUTO"] = "0"
@@ -293,6 +538,13 @@ function main(project_arg)
         ctx = Pkg.Types.Context()
         manifest_file = ctx.env.manifest_file
     end
+    # `julia-purifier update` resolves the project again, for every package
+    # or for the named ones, before the lock records the result.
+    if update !== nothing
+        @info "julia-purifier: updating $(isempty(update) ? "every package" : join(update, ", "))"
+        Pkg.Registry.add()
+        isempty(update) ? Pkg.update() : Pkg.update(update)
+    end
     root = dirname(manifest_file)
     manifest = TOML.parsefile(manifest_file)
 
@@ -308,6 +560,22 @@ function main(project_arg)
         push!(project_dirs, normpath(joinpath(root, p)))
     end
     workspace_dirs = Set(project_dirs)
+
+    out = lockfile_arg === nothing ? joinpath(root, LOCKFILE) : abspath(lockfile_arg)
+
+    inputs = Dict{String, String}()
+    for f in [manifest_file; [joinpath(d, "Project.toml") for d in project_dirs]]
+        isfile(f) && (inputs[relpath(f, root)] = bytes2hex(open(sha256, f)))
+    end
+
+    # A relock of an unchanged project keeps what was resolved against the
+    # registry: the test environments, the editor environment and the
+    # registry snapshot. Resolving them again would pick up versions
+    # released since, so the lockfile would change although the project
+    # did not.
+    previous = read_lock(out)
+    reuse = previous !== nothing && get(previous, "inputs", nothing) == inputs
+    reuse && @info "julia-purifier: the project is unchanged since $(out); keeping its resolved environments"
 
     # Pkg instantiates what the active project reaches, so each project of
     # a workspace is instantiated on its own.
@@ -326,32 +594,59 @@ function main(project_arg)
         haskey(project, "uuid") || continue
         has_test_target(project) || continue
         normpath(joinpath(dir, "test")) in workspace_dirs && continue
-        @info "julia-purifier: resolving the test environment of $(project["name"])"
-        env = test_environment(dir)
-        for (k, v) in env
-            env[k] = replace(v, root => ROOT)
+        key = relpath_or_dot(dir, root)
+        if reuse && haskey(previous["tests"], key)
+            env = previous["tests"][key]
+            instantiate_recorded(env, root)
+        else
+            @info "julia-purifier: resolving the test environment of $(project["name"])"
+            env = test_environment(dir)
+            for (k, v) in env
+                env[k] = replace(v, root => ROOT)
+            end
+            # The manifest's project hash depends on where the project lies,
+            # so the build computes it (nix/lib/project-hash.jl) and the
+            # lock leaves it out.
+            env["Manifest.toml"] = replace(env["Manifest.toml"], r"^project_hash = .*\n"m => "")
         end
-        # The manifest's project hash depends on where the project lies, so
-        # the build computes it (nix/lib/project-hash.jl) and the lock
-        # leaves it out.
-        env["Manifest.toml"] = replace(env["Manifest.toml"], r"^project_hash = .*\n"m => "")
-        tests[relpath_or_dot(dir, root)] = env
+        tests[key] = env
         append!(packages, packages_of(TOML.parse(env["Manifest.toml"])))
+    end
+
+    # The environment of the language server that editors start, so that
+    # `julia-purifier prefetch` can provide it offline.
+    editor = if reuse && haskey(previous, "editor")
+        instantiate_recorded(previous["editor"], root)
+        previous["editor"]
+    else
+        @info "julia-purifier: resolving the editor environment (LanguageServer.jl)"
+        editor_environment()
+    end
+    append!(packages, packages_of(TOML.parse(editor["Manifest.toml"])))
+
+    # The registries Pkg resolved with, which `Pkg.test` and `Pkg.add` read
+    # offline.
+    registries = if reuse && haskey(previous, "registries")
+        previous["registries"]
+    else
+        registry_entries()
     end
     Pkg.activate(root; io = devnull)
 
-    downloads = Dict{String, Any}()
-    links = Dict{String, String}()
-    builds = String[]
+    # The manifests name every package by its tree hash, with its UUID and,
+    # for a package added from a repository, the repository and the
+    # subdirectory. The lock adds what Nix needs beyond that: the hash of
+    # each package tarball from the package server, the commit and hash of
+    # each checkout, and the artifacts.
+    server_packages = Dict{String, String}()
+    git = Dict{String, Any}()
     artifacts = Dict(system => Dict{String, Any}() for (system, _) in SYSTEMS)
-    seen = Set{Tuple{UUID, String}}()
+    seen = Set{String}()
 
     for pkg in packages
-        (pkg.uuid, pkg.tree) in seen && continue
-        push!(seen, (pkg.uuid, pkg.tree))
+        pkg.tree in seen && continue
+        push!(seen, pkg.tree)
         tree = SHA1(pkg.tree)
-        slug = Base.version_slug(pkg.uuid, tree)
-        path = "packages/$(pkg.name)/$(slug)"
         installed = Pkg.Operations.find_installed(pkg.name, pkg.uuid, tree)
         isdir(installed) || error("julia-purifier: Pkg did not install $(pkg.name) at $(installed)")
 
@@ -365,34 +660,27 @@ function main(project_arg)
         end
         if repo === nothing
             @info "julia-purifier: hashing $(pkg.name)"
-            downloads[path] = archive_entry(
-                path, url, server_mirrors("package/$(pkg.uuid)/$(pkg.tree)"), sri(sha256_url(url))
-            )
+            server_packages[pkg.tree] = sri(sha256_url(url))
         else
             @info "julia-purifier: locating $(pkg.name) in $(repo)"
             src = git_source(repo, pkg.tree, pkg.rev, subdir, work)
-            entry = git_entry(src)
-            downloads[entry["path"]] = entry
-            links[path] = subdir === nothing ? entry["path"] : "$(entry["path"])/$(subdir)"
+            git[pkg.tree] = Dict("url" => src.url, "rev" => src.commit, "subdir" => subdir, "hash" => src.hash)
         end
-
-        isfile(joinpath(installed, "deps", "build.jl")) && push!(builds, path)
 
         for (system, (arch, os, libc)) in SYSTEMS
             platform = platform_of(arch, os, libc)
             for (_, selected) in Pkg.Operations.collect_artifacts(installed; platform, include_lazy = true)
                 for (name, meta) in selected
                     art_tree = meta["git-tree-sha1"]
-                    art_path = "artifacts/$(art_tree)"
-                    haskey(artifacts[system], art_path) && continue
+                    haskey(artifacts[system], art_tree) && continue
                     dls = get(meta, "download", Any[])
-                    artifacts[system][art_path] = if isempty(dls)
+                    artifacts[system][art_tree] = if isempty(dls)
                         a_url = "$SERVER/artifact/$(art_tree)"
-                        archive_entry(art_path, a_url, server_mirrors("artifact/$(art_tree)"), sri(sha256_url(a_url)))
+                        Dict("url" => a_url, "mirrors" => server_mirrors("artifact/$(art_tree)"), "hash" => sri(sha256_url(a_url)))
                     else
                         first_dl = dls[1]
                         mirrors = [d["url"] for d in dls[2:end] if d["sha256"] == first_dl["sha256"]]
-                        archive_entry(art_path, first_dl["url"], mirrors, sri(first_dl["sha256"]))
+                        Dict("url" => first_dl["url"], "mirrors" => mirrors, "hash" => sri(first_dl["sha256"]))
                     end
                 end
             end
@@ -407,31 +695,23 @@ function main(project_arg)
     if !isempty(host) && isdir(installed_artifacts)
         for t in readdir(installed_artifacts)
             occursin(r"^[0-9a-f]{40}$", t) || continue
-            haskey(artifacts[host[1]], "artifacts/$t") ||
+            haskey(artifacts[host[1]], t) ||
                 error("julia-purifier: Pkg installed the artifact $t, which the lock did not select for $(host[1])")
         end
     end
 
-    inputs = Dict{String, String}()
-    for f in [manifest_file; [joinpath(d, "Project.toml") for d in project_dirs]]
-        isfile(f) && (inputs[relpath(f, root)] = bytes2hex(open(sha256, f)))
-    end
-
     lock = Dict(
-        "version" => 1,
-        "julia" => string(VERSION),
+        "version" => FORMAT,
+        "server" => SERVER,
         "inputs" => inputs,
-        "downloads" => [downloads[k] for k in sort(collect(keys(downloads)))],
-        "links" => [Dict("from" => links[k], "to" => k) for k in sort(collect(keys(links)))],
-        "builds" => sort(builds),
-        "artifacts" => Dict(s => [a[k] for k in sort(collect(keys(a)))] for (s, a) in artifacts),
+        "packages" => server_packages,
+        "git" => git,
+        "artifacts" => artifacts,
         "tests" => tests,
+        "editor" => editor,
+        "registries" => registries,
     )
-    out = joinpath(root, "julia-purifier.lock.toml")
-    open(out, "w") do io
-        println(io, "# This file is written by `julia-purifier lock`. Commit it beside the manifest.")
-        TOML.print(io, lock; sorted = true)
-    end
+    write(out, lock_text(lock))
     @info "julia-purifier: wrote $(out)"
     return
 end
@@ -441,5 +721,19 @@ end
 # tests/lock-unit.jl includes this file for its functions; run as a
 # program, it locks the project.
 if abspath(PROGRAM_FILE) == @__FILE__
-    JuliaPurifierLock.main(isempty(ARGS) ? "." : ARGS[1])
+    # Usage: julia lock.jl [<project directory>] [--lockfile <path>]
+    #                      [--update [<package>...]]
+    let args = copy(ARGS), lockfile = nothing, update = nothing
+        u = findfirst(==("--update"), args)
+        if u !== nothing
+            update = args[(u + 1):end]
+            args = args[1:(u - 1)]
+        end
+        i = findfirst(==("--lockfile"), args)
+        if i !== nothing
+            lockfile = args[i + 1]
+            deleteat!(args, i:(i + 1))
+        end
+        JuliaPurifierLock.main(isempty(args) ? "." : args[1], lockfile, update)
+    end
 end

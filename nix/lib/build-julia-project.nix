@@ -1,46 +1,50 @@
 # SPDX-License-Identifier: MIT
 #
-# buildJuliaProject: builds a Julia project in the Nix sandbox from its
-# Manifest.toml and julia-purifier.lock.toml, offline.
+# lib.julia-purifier.buildJuliaProject: builds a Julia project in the Nix
+# sandbox from its manifest and julia-purifier.lock.json, offline.
 #
-#   (buildJuliaProject { src = ./.; }).packages.<Name>
+#   (lib.julia-purifier.buildJuliaProject { inherit pkgs; src = ./.; }).packages.<Name>
 #
 # The result has
 #
-#   depot        the Julia depot of the project's dependencies: every
-#                package source and artifact the lock names, the files that
-#                the dependencies' deps/build.jl scripts write, and the
-#                dependencies' precompiled caches. It is built from the
-#                manifest and the lockfile only, so it stays the same while
-#                the project's own sources change
-#   compiled     a depot with the precompiled caches of the project's own
-#                packages, on top of `depot`
-#   environment  `bin/julia`, Julia with the project active and both depots
-#                behind the user's own depot, offline
 #   packages     one package per project that is a Julia package (the root
 #                and the members of a workspace), by package name. Each has
 #                `bin/<app>` for every entry of the [apps] table in its
 #                Project.toml, and `share/julia-purifier/project`. Its
 #                `tests` attribute runs the package's tests
-#   tests        the test runs, by package name
+#   tests        the run of every package's tests
+#   release      what `julia-purifier publish` registers: per package, its
+#                source as Nix tested it and the git tree hash of that source
+#   fetches      the entries of the lock (lib.julia-purifier.readLock): the
+#                download entries of the shared purifier library for every
+#                system the lockfile covers, each artifact with `systems`
+#   depot        the Julia depot of the project's dependencies: every
+#                package source, artifact and registry the lock names, the
+#                files that the dependencies' deps/build.jl scripts write,
+#                and the dependencies' precompiled caches. It is built from
+#                the manifest and the lockfile only, so it stays the same
+#                while the project's own sources change
+#   compiled     a depot with the precompiled caches of the project's own
+#                packages, on top of `depot`
+#   environment  `bin/julia`, Julia with the project active and both depots
+#                behind the user's own depot, offline
+#   editor       the environment of LanguageServer.jl, with its own depot,
+#                for an editor's language server
+#   julia        the Julia the project builds with
 #
-# Every output is known from the Project.toml files and the lockfile, which
-# Nix reads at evaluation time.
+# Every attribute name of the result is known at evaluation time, from the
+# Project.toml files and the lockfile.
+{ lib, purifier }:
 {
-  lib,
   pkgs,
-  stdenvNoCC,
-  runCommand,
-  makeWrapper,
-  # The `purifier` namespace of the shared purifier library.
-  purifier,
-}:
-{
-  # The project root: the directory with the Manifest.toml and the
-  # julia-purifier.lock.toml (the root of a workspace).
+  # The project root: the directory with the Manifest.toml (the root of a
+  # workspace).
   src,
-  # The lockfile, when it is not julia-purifier.lock.toml in `src`.
-  lockFile ? src + "/julia-purifier.lock.toml",
+  # Fetchers for the shared purifier library, in place of nixpkgs' own, such
+  # as a `fetchurl` that goes through a company mirror or sends credentials.
+  fetchers ? { },
+  # The lockfile. A lockfile kept outside `src` replaces any copy in it.
+  lockFile ? src + "/julia-purifier.lock.json",
   # The manifest, when it is not in `src`. Julia packages often keep their
   # Manifest.toml out of version control; a build then takes it from
   # beside the lockfile.
@@ -50,17 +54,28 @@
   julia ? null,
   # Runs every package's tests as part of building it.
   doCheck ? false,
+  # Precompiles the dependencies and the project in the build. Julia stamps
+  # every precompiled cache with a build identifier, so a build with
+  # precompiled caches differs from a rebuild of it; without them, every
+  # output is reproducible, and Julia compiles on first use instead.
+  precompile ? true,
 }:
 let
-  system = stdenvNoCC.hostPlatform.system;
-  l = import ./lock.nix {
-    inherit
-      lib
-      src
-      system
-      lockFile
-      manifestFile
-      ;
+  inherit (pkgs) runCommand makeWrapper;
+  system = pkgs.stdenvNoCC.hostPlatform.system;
+  lock = purifier.checkLock (
+    import ./lock.nix { inherit lib; } {
+      inherit src lockFile manifestFile;
+    }
+  );
+  l = lock.julia // {
+    packages = lock.outputs;
+    julia = lock.julia.version;
+    downloads =
+      if builtins.elem system lock.julia.systems then
+        purifier.entriesFor system lock
+      else
+        throw "julia-purifier: ${toString lockFile} records no artifacts for ${system}; the lock covers ${lib.concatStringsSep ", " lock.julia.systems}.";
   };
 
   # The project as Julia sees it: `src`, with the manifest beside its
@@ -85,15 +100,20 @@ let
       pkgs.${juliaAttr}
         or (throw "julia-purifier: the lock was made with Julia ${l.julia}, and this nixpkgs has no ${juliaAttr}; pass `julia` to buildJuliaProject.");
 
-  downloads = purifier.tree {
-    inherit pkgs;
-    name = "julia-purifier-downloads";
-    entries = l.downloads;
-  };
+  downloads = purifier.tree (
+    {
+      inherit pkgs;
+      name = "julia-purifier-downloads";
+      entries = l.downloads;
+    }
+    // fetchers
+  );
 
-  # The depot paths that hold package sources and artifacts. Downloads
-  # under git/ are checkouts, which the links place in the depot.
-  depotPaths = builtins.filter (p: lib.hasPrefix "packages/" p || lib.hasPrefix "artifacts/" p) (
+  # The downloads that go into the depot at their own path: artifacts and
+  # registries. Package sources come from trees/ and git/, and
+  # nix/lib/place.jl puts them at the paths Julia derives from the
+  # manifests.
+  depotPaths = builtins.filter (p: lib.hasPrefix "artifacts/" p || lib.hasPrefix "registries/" p) (
     map (d: d.path) l.downloads
   );
 
@@ -119,10 +139,12 @@ let
         nativeBuildInputs = [ julia' ];
         passAsFile = [
           "paths"
-          "links"
+          "placements"
         ];
         paths = lib.concatMapStrings (p: "${p}\n") depotPaths;
-        links = lib.concatMapStrings (k: "${k.from}\t${k.to}\n") l.links;
+        placements = lib.concatMapStrings (
+          p: "${p.name} ${p.uuid} ${p.tree} ${p.from} ${if p.main then "1" else "0"}\n"
+        ) l.placements;
       }
       ''
         ${offlineEnv}
@@ -131,13 +153,10 @@ let
           mkdir -p "$out/$(dirname "$p")"
           cp -rL --preserve=mode ${downloads}/"$p" "$out/$p"
         done < "$pathsPath"
-        while IFS=$'\t' read -r from to; do
-          mkdir -p "$out/$(dirname "$to")"
-          cp -rL --preserve=mode ${downloads}/"$from" "$out/$to"
-        done < "$linksPath"
+        export JULIA_DEPOT_PATH="$out:"
+        julia --startup-file=no ${./place.jl} ${downloads} "$out" "$placementsPath" > builds
         chmod -R u+w "$out"
 
-        export JULIA_DEPOT_PATH="$out:"
         julia --startup-file=no ${./deps-env.jl} ${manifest} deps
         deps="$PWD/deps"
         julia --startup-file=no --project="$deps" -e 'using Pkg; Pkg.instantiate()'
@@ -145,12 +164,14 @@ let
         # of the manifest's packages, with the flags Pkg builds with. Pkg's
         # own build resolves a fresh environment against a registry, which
         # the sandbox does not have.
-        for p in ${lib.escapeShellArgs l.builds}; do
+        while IFS= read -r p; do
           echo "julia-purifier: running $p/deps/build.jl"
           (cd "$out/$p/deps" && julia --startup-file=no --project="$deps" -O0 --compile=min --color=no build.jl)
-        done
-        julia --startup-file=no --project="$deps" -e 'using Pkg; Pkg.precompile()'
-        rm -rf "$out/logs"
+        done < builds
+        ${lib.optionalString precompile ''
+          julia --startup-file=no --project="$deps" -e 'using Pkg; Pkg.precompile()'
+        ''}
+        rm -rf "$out/logs" "$out/scratchspaces"
       '';
 
   # Julia writes new caches into the first depot only, so the project's own
@@ -167,14 +188,16 @@ let
         export JULIA_DEPOT_PATH="$out:${depot}:"
         # Pkg precompiles what the active project reaches, so each project
         # of a workspace is precompiled on its own.
-        for dir in ${lib.escapeShellArgs (map projectDir (builtins.attrNames l.projects))}; do
-          julia --startup-file=no --project="$dir" -e '
-            using Pkg
-            Pkg.instantiate()
-            Pkg.precompile()
-          '
-        done
-        rm -rf "$out/logs" "$out/environments"
+        ${lib.optionalString precompile ''
+          for dir in ${lib.escapeShellArgs (map projectDir (builtins.attrNames l.projects))}; do
+            julia --startup-file=no --project="$dir" -e '
+              using Pkg
+              Pkg.instantiate()
+              Pkg.precompile()
+            '
+          done
+        ''}
+        rm -rf "$out/logs" "$out/environments" "$out/scratchspaces"
       '';
 
   # The depots a program of the project runs with. The leading empty entry
@@ -192,6 +215,35 @@ let
           --set JULIA_DEPOT_PATH ${lib.escapeShellArg runtimeDepots} \
           --set-default JULIA_PKG_OFFLINE true \
           --add-flags "--project=${projectSrc}"
+      '';
+
+  # The language server's environment: `env` holds its Project.toml and
+  # Manifest.toml, `depot` the precompiled caches of LanguageServer.jl on
+  # top of the project's depot.
+  editor =
+    runCommand "julia-purifier-editor"
+      {
+        nativeBuildInputs = [ julia' ];
+        passAsFile = [
+          "project"
+          "manifest"
+        ];
+        project = l.editor."Project.toml";
+        manifest = l.editor."Manifest.toml";
+      }
+      ''
+        ${offlineEnv}
+        mkdir -p "$out/env" "$out/depot"
+        cp "$projectPath" "$out/env/Project.toml"
+        cp "$manifestPath" "$out/env/Manifest.toml"
+        export JULIA_DEPOT_PATH="$out/depot:${depot}:"
+        julia --startup-file=no ${./project-hash.jl} "$out/env"
+        julia --startup-file=no --project="$out/env" -e '
+          using Pkg
+          Pkg.instantiate()
+          ${lib.optionalString precompile "Pkg.precompile()"}
+        '
+        rm -rf "$out/depot/logs" "$out/depot/environments" "$out/depot/scratchspaces"
       '';
 
   testFor =
@@ -245,7 +297,38 @@ let
     else
       null;
 
-  tests = lib.filterAttrs (_: t: t != null) (lib.mapAttrs (_: testFor) l.packages);
+  packageTests = lib.filterAttrs (_: t: t != null) (lib.mapAttrs (_: testFor) l.packages);
+
+  tests = runCommand "julia-purifier-tests" { } ''
+    mkdir -p "$out"
+    ${lib.concatStrings (lib.mapAttrsToList (name: t: "ln -s ${t} \"$out/${name}\"\n") packageTests)}
+  '';
+
+  # Per package, its source as `src` holds it, its directory in `src` and the
+  # git tree hash of that source, which a registry records. The source comes
+  # from `src` rather than from the copy with an added manifest, so that its
+  # tree hash is the tree of the committed directory. A release depends on
+  # the tests, so only a tested source is released.
+  release =
+    runCommand "julia-purifier-release"
+      {
+        nativeBuildInputs = [ julia' ];
+        inherit tests;
+      }
+      ''
+        export HOME="$TMPDIR"
+        mkdir -p "$out"
+        ${lib.concatStrings (
+          lib.mapAttrsToList (name: p: ''
+            cp -r ${if p.dir == "." then "${src}" else "${src}/${p.dir}"} "$out/${name}"
+            printf '%s\n' ${lib.escapeShellArg p.dir} > "$out/${name}.dir"
+            julia --startup-file=no -e '
+              using Pkg
+              print(bytes2hex(Pkg.GitTools.tree_hash(ARGS[1])))
+            ' "$out/${name}" > "$out/${name}.tree-sha1"
+          '') l.packages
+        )}
+      '';
 
   packageFor =
     name: p:
@@ -264,7 +347,7 @@ let
             (if spec ? submodule then "${name}.${spec.submodule}" else name)
           ]
         );
-      test = tests.${name} or null;
+      test = packageTests.${name} or null;
     in
     runCommand "${lib.strings.sanitizeDerivationName name}-${p.version or "0.0.0"}"
       {
@@ -295,12 +378,15 @@ let
       '';
 in
 {
+  packages = lib.mapAttrs packageFor l.packages;
   inherit
+    tests
+    release
     depot
     compiled
     environment
-    tests
+    editor
     ;
+  fetches = lock.entries;
   julia = julia';
-  packages = lib.mapAttrs packageFor l.packages;
 }

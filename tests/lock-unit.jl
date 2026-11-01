@@ -87,18 +87,24 @@ const L = JuliaPurifierLock
         @test pkgs["Core2"].subdir == "Core2"
     end
 
-    @testset "entries" begin
-        a = L.archive_entry("packages/X/abcde", "https://s/x", ["https://m/x"], "sha256-AA==")
-        @test a == Dict(
-            "path" => "packages/X/abcde",
-            "archive" => Dict("url" => "https://s/x", "mirrors" => ["https://m/x"], "stripTop" => false),
-            "hash" => "sha256-AA==",
+    @testset "lockfile text" begin
+        lock = Dict(
+            "version" => L.FORMAT,
+            "packages" => Dict("06d90f699285d055e34f0b014636a75a17ff2252" => "sha256-AA=="),
+            "git" => Dict("c0" => Dict("url" => "https://h/r", "rev" => "c0ffee", "subdir" => nothing, "hash" => "sha256-BB==")),
+            "tests" => Dict("." => Dict("Manifest.toml" => "a = \"b\\\\c\"\n\ttab")),
+            "empty" => Any[],
         )
-        g = L.git_entry(L.GitSource("https://h/r", "c0ffee", "sha256-BB=="))
-        @test g["path"] == "git/c0ffee"
-        @test g["git"] == Dict(
-            "url" => "https://h/r", "rev" => "c0ffee", "submodules" => false, "leaveDotGit" => false,
-        )
+        text = L.lock_text(lock)
+        @test startswith(text, "{\n  \"version\": $(L.FORMAT),\n  \"hash\": \"sha256-")
+        file = tempname()
+        write(file, text)
+        @test L.read_lock(file) == merge(lock, Dict("hash" => L.parse_json(text)["hash"]))
+        # An edit anywhere breaks the content hash.
+        write(file, replace(text, "c0ffee" => "c0ffef"))
+        @test L.read_lock(file) === nothing
+        write(file, text[1:(end - 10)])
+        @test L.read_lock(file) === nothing
     end
 
     @testset "find_commit" begin
