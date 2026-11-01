@@ -85,7 +85,9 @@ let
         toHashFormat = "sri";
       } == builtins.head recorded;
 
-  parsed = builtins.fromJSON text;
+  # Nix cannot catch a parse error, so one that gets past the content hash
+  # check fails evaluation with a message that names the command.
+  parsed = builtins.addErrorContext "while parsing ${name}; ${relock}" (builtins.fromJSON text);
 
   manifestName = builtins.head (
     builtins.filter (lib.hasPrefix "Manifest") (builtins.attrNames (parsed.inputs or { }))
@@ -100,7 +102,9 @@ let
     !builtins.pathExists (inputPath f) || builtins.hashFile "sha256" (inputPath f) != parsed.inputs.${f}
   ) (builtins.attrNames parsed.inputs);
 
-  projectManifest = builtins.fromTOML (builtins.readFile manifest);
+  projectManifest = builtins.addErrorContext "while parsing ${toString manifest}; ${relock}" (
+    builtins.fromTOML (builtins.readFile manifest)
+  );
 
   # The packages a manifest pins by tree hash. Packages with a path are part
   # of the source, and standard libraries come with Julia.
