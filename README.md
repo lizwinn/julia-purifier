@@ -1,53 +1,101 @@
 # julia-purifier
 
-julia-purifier builds Julia projects in the Nix sandbox from their
-Manifest.toml. The manifest names every package by its UUID and git tree
-hash. A tree hash is not a hash that Nix can check a download against, so a
-lock run records, in `julia-purifier.lock.json`, what the manifest cannot:
-the Nix hash of each package source, the URL and hash of each artifact, the
-registry snapshot, and the test and editor environments that Pkg resolves
-apart from the manifest. Nix then fetches those files, builds a depot from
-them, precompiles in the sandbox, and runs the commands and tests of the
-project offline.
+julia-purifier keeps Julia's development workflow on locked,
+Nix-resolved dependencies. Use the normal build and test commands in your
+working tree; building the project itself in the Nix sandbox is an
+optional next step.
+
+It follows the [purifier contract](https://github.com/nix-purifiers/purifier/blob/main/CONTRACT.md).
 
 julia-purifier meets the [purifier contract](https://github.com/nix-purifiers/purifier/blob/main/CONTRACT.md).
 
+## Installation
+
+Install the integration into your Nix profile once:
+
+```sh
+nix profile install 'github:nix-purifiers/julia-purifier'
+```
+
+The required wrapper is `julia-purifier julia`; pass your usual tool
+arguments after it. With no purifier lockfile, it warns on standard error
+and runs the ordinary tool with impure resolution.
+
+`nix shell` makes an integration available temporarily instead of installing
+it. Keep using the activation steps below where a project environment or
+prefetched cache is required.
+
 ## Quickstart
 
-In a Julia project (a directory with a Project.toml):
+Install Nix, then run the following from your existing project's root.
+The setup prepares the locked dependencies and the integration that
+Julia's normal commands use:
 
 ```zsh
 nix run github:nix-purifiers/julia-purifier -- lock
+nix run github:nix-purifiers/julia-purifier -- prefetch
+eval "$(nix run github:nix-purifiers/julia-purifier -- env)"
+julia --project -e 'using Pkg; Pkg.test()'
 ```
 
-This writes `julia-purifier.lock.json` beside the manifest. A project without
-a manifest gets one, because the lock resolves the project first. We
-recommend committing both files, `Manifest.toml` and
-`julia-purifier.lock.json`, to the repository. That is the default setup, and
-the build below uses them.
+Commit the lockfiles that the lock command writes, including the build
+tool's own lockfile when it has one. Keep using the project's usual build,
+test and editor commands with this setup. Nix provides the locked
+dependencies; the development commands above run outside the Nix sandbox.
+No project Nix files are needed for this workflow.
 
-Then build the project from its directory. The command adds no Nix file to
-the project. Replace `MyPackage` with the name of the package in your
-Project.toml:
+Sandboxed builds of the whole project are an optional
+[next step](#building-the-project-with-nix).
 
-```zsh
-nix build --impure --expr '
-  let
-    purifier = builtins.getFlake "github:nix-purifiers/julia-purifier";
-    pkgs = import purifier.inputs.nixpkgs {
-      system = builtins.currentSystem;
-      overlays = [ purifier.overlays.default ];
-    };
-  in
-  (pkgs.julia-purifier.buildJuliaProject { src = ./.; }).packages.MyPackage'
-```
+## Development loop
 
-This uses the purifier's pinned nixpkgs, matching the lock command above.
-To build with ambient `<nixpkgs>` from your Nix search path instead,
-replace `import purifier.inputs.nixpkgs` with `import <nixpkgs>`.
-Both forms need no Nix files in your project. The build tool and language
-versions must match the lockfile; with ambient nixpkgs, lock with the
-purifier from that package set or pass a compatible toolchain to the builder.
+The development loop goes through Julia itself, on the locked downloads.
+Pkg has no plugin mechanism for tasks, so the `julia-purifier` command is a
+program that runs Pkg and records what Pkg downloaded:
+
+- `julia-purifier julia [args...]` runs Julia with `JULIA_PKG_OFFLINE=true`
+  and the project active. Edit the code of the project and run it this way;
+  the depot of dependencies stays as it is. Without a lockfile, or with
+  `JULIA_PURIFIER=0`, it is plain Julia.
+- To add or upgrade a dependency, run Pkg with the network:
+  `JULIA_PKG_OFFLINE=false julia-purifier julia -e 'using Pkg; Pkg.add("X")'`.
+  The next run says the lockfile is stale, and `julia-purifier lock` renews
+  it.
+- `julia-purifier update [package...]` updates the named packages, or every
+  package, with `Pkg.update`, and then locks the result. `lock` keeps the
+  resolution of the manifest as it is.
+- `julia-purifier env` prints the environment of `julia` as shell exports
+  (`JULIA_DEPOT_PATH`, `JULIA_PKG_OFFLINE`, `JULIA_PROJECT` and `PATH`). A
+  tool that starts `julia` itself gets the locked dependencies this way, for
+  example with `eval "$(julia-purifier env)"` in an `.envrc`.
+- `julia-purifier publish <registry> [--push] [dir]` builds and tests the
+  committed tree of the project with Nix, and then registers the version of
+  each package with [LocalRegistry.jl](https://github.com/GunnarFarneback/LocalRegistry.jl).
+  `registry` is the name or URL of a registry. A Julia package has no archive
+  to upload: a version is an entry in a registry that names a git tree. The
+  `release` therefore holds the source and tree hash that Nix built and
+  tested, and `publish` registers that tree. The command stops if the
+  released tree differs from the committed one. For the General registry,
+  which accepts versions through its Registrator bot, register the commit
+  that this command has built.
+
+A build can instead keep its lockfiles outside the repository. The
+purifier lockfile is then named by `--lockfile <path>`, right after the name
+of the command, or by the environment variable `JULIA_PURIFIER_LOCKFILE`.
+The `Manifest.toml` is named by `--tool-lockfile <path>` or by
+`JULIA_PURIFIER_TOOL_LOCKFILE`. With either one, `lock` and `update` read and
+write the file there and leave the copy in the tree as it is. When the file
+does not exist yet, they start from the copy in the tree. A flag takes
+precedence over its variable, and both take precedence over the files in the
+tree.
+
+## Building the project with Nix
+
+Once the native development workflow is working, you can also build and
+test the whole project in the Nix sandbox. For this step, keep a flake or
+another Nix build definition in the project's repository, or maintain an
+external packaging repository that points at its sources and lockfiles.
+The builder consumes the same lockfiles as the development workflow.
 
 The overlay adds one attribute to the package set, the scope
 `pkgs.julia-purifier`, which holds the builder `buildJuliaProject` and the
@@ -134,47 +182,29 @@ evaluation with it.
 `nix develop github:nix-purifiers/julia-purifier` gives a shell with the
 `julia-purifier` command.
 
-## Development loop
+### One-off builds without a project Nix file
 
-The development loop goes through Julia itself, on the locked downloads.
-Pkg has no plugin mechanism for tasks, so the `julia-purifier` command is a
-program that runs Pkg and records what Pkg downloaded:
+For an ad hoc build, the builder can also be evaluated directly from the
+project root. Replace the example package name with one from your project:
 
-- `julia-purifier julia [args...]` runs Julia with `JULIA_PKG_OFFLINE=true`
-  and the project active. Edit the code of the project and run it this way;
-  the depot of dependencies stays as it is. Without a lockfile, or with
-  `JULIA_PURIFIER=0`, it is plain Julia.
-- To add or upgrade a dependency, run Pkg with the network:
-  `JULIA_PKG_OFFLINE=false julia-purifier julia -e 'using Pkg; Pkg.add("X")'`.
-  The next run says the lockfile is stale, and `julia-purifier lock` renews
-  it.
-- `julia-purifier update [package...]` updates the named packages, or every
-  package, with `Pkg.update`, and then locks the result. `lock` keeps the
-  resolution of the manifest as it is.
-- `julia-purifier env` prints the environment of `julia` as shell exports
-  (`JULIA_DEPOT_PATH`, `JULIA_PKG_OFFLINE`, `JULIA_PROJECT` and `PATH`). A
-  tool that starts `julia` itself gets the locked dependencies this way, for
-  example with `eval "$(julia-purifier env)"` in an `.envrc`.
-- `julia-purifier publish <registry> [--push] [dir]` builds and tests the
-  committed tree of the project with Nix, and then registers the version of
-  each package with [LocalRegistry.jl](https://github.com/GunnarFarneback/LocalRegistry.jl).
-  `registry` is the name or URL of a registry. A Julia package has no archive
-  to upload: a version is an entry in a registry that names a git tree. The
-  `release` therefore holds the source and tree hash that Nix built and
-  tested, and `publish` registers that tree. The command stops if the
-  released tree differs from the committed one. For the General registry,
-  which accepts versions through its Registrator bot, register the commit
-  that this command has built.
+```zsh
+nix build --impure --expr '
+  let
+    purifier = builtins.getFlake "github:nix-purifiers/julia-purifier";
+    pkgs = import purifier.inputs.nixpkgs {
+      system = builtins.currentSystem;
+      overlays = [ purifier.overlays.default ];
+    };
+  in
+  (pkgs.julia-purifier.buildJuliaProject { src = ./.; }).packages.MyPackage'
+```
 
-A build can instead keep its lockfiles outside the repository. The
-purifier lockfile is then named by `--lockfile <path>`, right after the name
-of the command, or by the environment variable `JULIA_PURIFIER_LOCKFILE`.
-The `Manifest.toml` is named by `--tool-lockfile <path>` or by
-`JULIA_PURIFIER_TOOL_LOCKFILE`. With either one, `lock` and `update` read and
-write the file there and leave the copy in the tree as it is. When the file
-does not exist yet, they start from the copy in the tree. A flag takes
-precedence over its variable, and both take precedence over the files in the
-tree.
+This uses the purifier's pinned nixpkgs, matching the lock command above.
+To build with ambient `<nixpkgs>` from your Nix search path instead,
+replace `import purifier.inputs.nixpkgs` with `import <nixpkgs>`.
+Both forms need no Nix files in your project. The build tool and language
+versions must match the lockfile; with ambient nixpkgs, lock with the
+purifier from that package set or pass a compatible toolchain to the builder.
 
 ## Working offline
 
@@ -261,6 +291,11 @@ has no SSH keys. A private repository then needs a `fetchers` entry with
 credentials.
 
 ## Examples
+
+For day-to-day work on these projects, use the native-tool setup and
+commands in [Quickstart](#quickstart) and [Development loop](#development-loop).
+The Nix expressions below show optional sandboxed packaging of those
+projects.
 
 This example builds and tests [JSON3.jl](https://github.com/quinnj/JSON3.jl),
 a package that commits no `Manifest.toml`. In a clone of the repository, lock

@@ -235,6 +235,9 @@ writeShellApplication {
         # the manifest's Julia where there is a manifest, nixpkgs' default
         # Julia otherwise.
         if [ "''${JULIA_PURIFIER:-1}" = 0 ] || ! root="$(find_root .)" || [ ! -f "''${lockfile_arg:-$root/julia-purifier.lock.json}" ]; then
+          if [ "''${JULIA_PURIFIER:-1}" != 0 ]; then
+            echo "julia-purifier: warning: no julia-purifier.lock.json found; running julia impurely. Run \`julia-purifier lock\` to use Nix-resolved dependencies." >&2
+          fi
           if [ -n "''${root:-}" ] && julia="$(julia_for "$root")"; then
             exec "$julia/bin/julia" "$@"
           fi
