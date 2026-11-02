@@ -289,9 +289,10 @@ a package that commits no `Manifest.toml`. In a clone of the repository, lock
 the project:
 
 ```zsh
+nix shell 'github:nix-purifiers/julia-purifier'
 git clone https://github.com/quinnj/JSON3.jl
 cd JSON3.jl
-nix run github:nix-purifiers/julia-purifier -- lock
+julia-purifier lock
 ```
 
 The lock resolves the project, and writes `Manifest.toml` and
