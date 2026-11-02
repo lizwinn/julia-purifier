@@ -166,7 +166,7 @@ which reads the manifest and the lockfile into the shared shape
 incomplete lockfile shows up in `problems`, and the builder fails
 evaluation with it.
 
-`nix develop github:nix-purifiers/julia-purifier` gives a shell with the
+`nix shell 'github:nix-purifiers/julia-purifier'` gives a shell with the
 `julia-purifier` command.
 
 ### One-off builds without a project Nix file
