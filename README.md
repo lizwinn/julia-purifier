@@ -93,7 +93,8 @@ flake can live in the repository of the project or in another repository:
 
 ```nix
 {
-  inputs.julia-purifier.url = "github:nix-purifiers/julia-purifier";
+  inputs.julia-purifier.url =
+    "github:nix-purifiers/julia-purifier";
   inputs.nixpkgs.follows = "julia-purifier/nixpkgs";
 
   outputs =
@@ -104,10 +105,13 @@ flake can live in the repository of the project or in another repository:
         inherit system;
         overlays = [ julia-purifier.overlays.default ];
       };
-      project = pkgs.julia-purifier.buildJuliaProject { src = ./.; };
+      project = pkgs.julia-purifier.buildJuliaProject {
+        src = ./.;
+      };
     in
     {
-      packages.${system}.default = project.packages.MyPackage;
+      packages.${system}.default =
+        project.packages.MyPackage;
       checks.${system}.tests = project.tests;
     };
 }
