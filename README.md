@@ -328,11 +328,8 @@ To run the test suite of JSON3.jl in the sandbox, build `.tests` in place of
 
 ## Credits
 
-The design comes from sbt-nix-backend, now
-[sbt-purifier](https://github.com/nix-purifiers/sbt-purifier). The purifier
-idea was inspired by the [cargo (libnix)](https://github.com/nixcloud/cargo)
-project of nixcloud. The shared library is
-[purifier](https://github.com/nix-purifiers/purifier).
+The purifier idea was inspired by nixcloud's
+[cargo (libnix)](https://github.com/nixcloud/cargo).
 
 ## License
 
