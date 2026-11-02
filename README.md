@@ -106,7 +106,8 @@ flake can live in the repository of the project or in another repository:
   inputs.julia-purifier.url = "github:nix-purifiers/julia-purifier";
   inputs.nixpkgs.follows = "julia-purifier/nixpkgs";
 
-  outputs = { nixpkgs, julia-purifier, ... }:
+  outputs =
+    { nixpkgs, julia-purifier, ... }:
     let
       system = "x86_64-linux";
       pkgs = import nixpkgs {
@@ -184,15 +185,15 @@ For an ad hoc build, the builder can also be evaluated directly from the
 project root. Replace the example package name with one from your project:
 
 ```zsh
-nix build --impure --expr '
-  let
-    purifier = builtins.getFlake "github:nix-purifiers/julia-purifier";
-    pkgs = import purifier.inputs.nixpkgs {
-      system = builtins.currentSystem;
-      overlays = [ purifier.overlays.default ];
-    };
-  in
-  (pkgs.julia-purifier.buildJuliaProject { src = ./.; }).packages.MyPackage'
+nix build --impure --expr 'let
+  purifier = builtins.getFlake "github:nix-purifiers/julia-purifier";
+  pkgs = import purifier.inputs.nixpkgs {
+    system = builtins.currentSystem;
+    overlays = [ purifier.overlays.default ];
+  };
+in
+(pkgs.julia-purifier.buildJuliaProject { src = ./.; })
+.packages.MyPackage'
 ```
 
 This uses the purifier's pinned nixpkgs, matching the lock command above.
@@ -308,15 +309,15 @@ The lock resolves the project, and writes `Manifest.toml` and
 directory of the clone:
 
 ```zsh
-nix build --impure --expr '
-  let
-    purifier = builtins.getFlake "github:nix-purifiers/julia-purifier";
-    pkgs = import purifier.inputs.nixpkgs {
-      system = builtins.currentSystem;
-      overlays = [ purifier.overlays.default ];
-    };
-  in
-  (pkgs.julia-purifier.buildJuliaProject { src = ./.; }).packages.JSON3'
+nix build --impure --expr 'let
+  purifier = builtins.getFlake "github:nix-purifiers/julia-purifier";
+  pkgs = import purifier.inputs.nixpkgs {
+    system = builtins.currentSystem;
+    overlays = [ purifier.overlays.default ];
+  };
+in
+(pkgs.julia-purifier.buildJuliaProject { src = ./.; })
+.packages.JSON3'
 ```
 
 To run the test suite of JSON3.jl in the sandbox, build `.tests` in place of
