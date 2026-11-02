@@ -5,32 +5,15 @@ Nix-resolved dependencies. Use the normal build and test commands in your
 working tree; building the project itself in the Nix sandbox is an
 optional next step.
 
-## Installation
-
-Install the integration into your Nix profile once:
-
-```sh
-nix profile install 'github:nix-purifiers/julia-purifier'
-```
-
-The required wrapper is `julia-purifier julia`; pass your usual tool
-arguments after it. With no purifier lockfile, it warns on standard error
-and runs the ordinary tool with impure resolution.
-
-`nix shell` makes an integration available temporarily instead of installing
-it. Keep using the activation steps below where a project environment or
-prefetched cache is required.
-
 ## Quickstart
 
-Install Nix, then run the following from your existing project's root.
-The setup prepares the locked dependencies and the integration that
-Julia's normal commands use:
+From the project root:
 
 ```zsh
-nix run github:nix-purifiers/julia-purifier -- lock
-nix run github:nix-purifiers/julia-purifier -- prefetch
-eval "$(nix run github:nix-purifiers/julia-purifier -- env)"
+nix shell 'github:nix-purifiers/julia-purifier'
+julia-purifier lock
+julia-purifier prefetch
+eval "$(julia-purifier env)"
 julia --project -e 'using Pkg; Pkg.test()'
 ```
 
@@ -42,6 +25,13 @@ No project Nix files are needed for this workflow.
 
 Sandboxed builds of the whole project are an optional
 [next step](#building-the-project-with-nix).
+
+The required wrapper is `julia-purifier julia`; pass your usual tool
+arguments after it. With no purifier lockfile, it warns on standard error
+and runs the ordinary tool with impure resolution.
+
+For persistent use, add these packages through your usual Nix configuration.
+
 
 ## Development loop
 
